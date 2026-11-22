@@ -14,10 +14,8 @@ class Ai::LegacyEnvConfig
   # model on the OpenAI endpoint.
   VECTOR_STORE_MODEL = "vector_store".freeze
   LLM_FEATURES = %i[bill_setup extract_pdf detect_merchants enhance_merchants].freeze
-  # Each generation feature's prompt folder: OpenAI's detailed prompt on native OpenAI, the
-  # simplified one on custom servers, and Anthropic's own.
+  # Each generation feature's prompt folder: OpenAI's prompt, and Anthropic's own.
   PROMPTS = { bill_setup: "bill_setup" }.freeze
-  SIMPLE_PROMPTS = %i[categorize detect_merchants enhance_merchants].freeze   # bill setup has one OpenAI prompt
   JSON_MODES = Ai::Config::Endpoint::JSON_MODES.map(&:to_s).freeze
   ANTHROPIC_MAX_TOKENS = 4096
   EMBEDDING_TIMEOUT = 120         # VectorStore::Embeddable's client
@@ -35,17 +33,13 @@ class Ai::LegacyEnvConfig
   def self.build = new.build
 
   # The prompt variant the providers send for `feature` to this kind of endpoint: Anthropic's own,
-  # the simplified one on a custom OpenAI-compatible server, otherwise OpenAI's detailed one.
+  # otherwise OpenAI's.
   def self.prompt_for(feature, endpoint)
     source = Ai::Routes.source_of(feature)   # a shadow runs its primary's variant
     base = PROMPTS[source]
     return unless base && endpoint.protocol != :jev
 
-    if endpoint.protocol == :anthropic then "#{base}_anthropic"
-    elsif endpoint.protocol == :compatible && SIMPLE_PROMPTS.include?(source) &&
-          Provider::Openai.custom_endpoint?(endpoint.base_url) then "#{base}_simple"
-    else base
-    end
+    endpoint.protocol == :anthropic ? "#{base}_anthropic" : base
   end
 
   # The OpenAI endpoint's URL, set or not its token: OPENAI_URI_BASE, then the saved setting.

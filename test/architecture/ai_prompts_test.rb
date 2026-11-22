@@ -106,9 +106,7 @@ class AiPromptsTest < ActiveSupport::TestCase
   end
 
   test "every prompt folder is one a route can name" do
-    used = Ai::LegacyEnvConfig::PROMPTS.flat_map do |feature, base|
-      [ base, "#{base}_anthropic", *("#{base}_simple" if Ai::LegacyEnvConfig::SIMPLE_PROMPTS.include?(feature)) ]
-    end
+    used = Ai::LegacyEnvConfig::PROMPTS.values.flat_map { |base| [ base, "#{base}_anthropic" ] }
     # The core tests' AiTestGeneration runs detect_merchants' simple folder until merchant detection moves.
     used += [ AiTestGeneration.prompt_key ]
     folders = Ai::Prompt::ROOT.children.select(&:directory?).map { _1.basename.to_s } - %w[shared]
