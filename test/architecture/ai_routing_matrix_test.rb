@@ -57,4 +57,17 @@ class AiRoutingMatrixTest < ActiveSupport::TestCase
 
     assert_includes guide, Ai::Routes.doc_table, "regenerate it: bin/rails ai:routes_doc"
   end
+
+  # Every generation declares a feature in the table and has its own test file.
+  test "every generation declares a routed feature and has a test file" do
+    generations = Rails.root.glob("app/models/ai/generations/*.rb").map { "Ai::Generations::#{_1.basename(".rb").to_s.camelize}".constantize }
+
+    assert_not_empty generations
+    generations.each do |generation|
+      assert_includes MATRIX.keys, generation.feature_key, "#{generation} declares an unknown feature"
+      assert Ai::Prompt.exists?(generation.prompt_key), "#{generation} names a missing prompt folder"
+      test_file = Rails.root.join("test/models/ai/generations/#{generation.name.demodulize.underscore}_test.rb")
+      assert test_file.exist?, "add #{test_file.relative_path_from(Rails.root)}"
+    end
+  end
 end

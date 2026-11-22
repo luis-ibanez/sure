@@ -14,6 +14,12 @@ class Ai::LegacyEnvConfig
   # model on the OpenAI endpoint.
   VECTOR_STORE_MODEL = "vector_store".freeze
   LLM_FEATURES = %i[bill_setup extract_pdf detect_merchants enhance_merchants].freeze
+  # Each generation feature's prompt folder: OpenAI's detailed prompt on native OpenAI, the
+  # simplified one on custom servers, and Anthropic's own.
+  PROMPTS = { bill_setup: "bill_setup" }.freeze
+  SIMPLE_PROMPTS = %i[categorize detect_merchants enhance_merchants].freeze   # bill setup has one OpenAI prompt
+  JSON_MODES = Ai::Config::Endpoint::JSON_MODES.map(&:to_s).freeze
+  ANTHROPIC_MAX_TOKENS = 4096
   EMBEDDING_TIMEOUT = 120         # VectorStore::Embeddable's client
   EXTERNAL_ASSISTANT_TIMEOUT = 120 # Assistant::External::Client::TIMEOUT_READ
 
@@ -22,10 +28,36 @@ class Ai::LegacyEnvConfig
   SETTING_FIELDS = %i[
     openai_access_token openai_uri_base openai_model openai_request_timeout anthropic_access_token anthropic_model
     anthropic_base_url llm_provider jev_api_key jev_endpoint jev_model external_assistant_url external_assistant_token
-    external_assistant_model external_assistant_agent_id
+    external_assistant_model external_assistant_agent_id openai_json_mode llm_context_window llm_max_response_tokens
+    llm_max_items_per_call
   ].freeze
 
   def self.build = new.build
+
+  # The prompt variant the providers send for `feature` to this kind of endpoint: Anthropic's own,
+  # the simplified one on a custom OpenAI-compatible server, otherwise OpenAI's detailed one.
+  def self.prompt_for(feature, endpoint)
+    source = Ai::Routes.source_of(feature)   # a shadow runs its primary's variant
+    base = PROMPTS[source]
+    return unless base && endpoint.protocol != :jev
+
+    if endpoint.protocol == :anthropic then "#{base}_anthropic"
+    elsif endpoint.protocol == :compatible && SIMPLE_PROMPTS.include?(source) &&
+          Provider::Openai.custom_endpoint?(endpoint.base_url) then "#{base}_simple"
+    else base
+    end
+  end
+
+  # The OpenAI endpoint's URL, set or not its token: OPENAI_URI_BASE, then the saved setting.
+  def self.openai_uri_base = ENV["OPENAI_URI_BASE"].presence || Setting.openai_uri_base.presence
+
+  # OPENAI_EXTRA_HEADERS without the session-valued ones ({session_id}), which only chat fills in.
+  def self.static_openai_headers = Provider::Openai.extra_headers.reject { |_, value| value.include?("{session_id}") }
+
+  # The OpenAI endpoint's JSON mode: LLM_JSON_MODE, then the saved setting, then auto.
+  def self.openai_json_mode
+    [ ENV["LLM_JSON_MODE"].presence, Setting.openai_json_mode.presence ].find { JSON_MODES.include?(_1) } || "auto"
+  end
 
   def self.fingerprint
     [ ENV.to_h.select { |name, _| name.start_with?(*ENV_PREFIXES) }.sort, SETTING_FIELDS.map { Setting.public_send(_1) } ].hash
@@ -40,14 +72,18 @@ class Ai::LegacyEnvConfig
     embed_model = embedding_model if %i[pgvector qdrant].include?(backend)
     embed_route_model = embed_route(backend, llm[:openai], embed_model)
 
-    llm_models = reachable_llm_models(llm)
-    routes = LLM_FEATURES.index_with { |feature| route_list(feature, llm_models) }
-    routes[:chat] = route_list(:chat, llm_models + [ agent_model ].compact)
-    routes[:categorize] = route_list(:categorize, [ jev_model, *llm_models ].compact, conditions: { jev_model => :jev_family })
+    # Both walk the LLM order and stop at a provider that can't be built. Generations list only the provider it picks, so failover never
+    # sends a family's data to a provider the install doesn't use; chat lists every provider the
+    # walk reaches, as it resolves its own provider.
+    reached = reachable_llm_models(llm)
+    preferred = [ reached.first ].compact
+    routes = LLM_FEATURES.index_with { |feature| route_list(feature, preferred) }
+    routes[:chat] = route_list(:chat, reached + [ agent_model ].compact)
+    routes[:categorize] = route_list(:categorize, [ jev_model, *reached ].compact, conditions: { jev_model => :jev_family })
     routes[:embed] = route_list(:embed, [ embed_route_model ].compact)
 
     endpoints = (llm.values.map(&:first) + [ jev_model, agent_model, embed_model ].compact.map(&:endpoint)).uniq
-    models = (llm_models + [ jev_model, agent_model, embed_model, embed_route_model ]).compact.uniq
+    models = (reached + [ jev_model, agent_model, embed_model, embed_route_model ]).compact.uniq
 
     Ai::Config.new(endpoints:, models:, routes: routes.reject { |_, list| list.empty? }, vector_store_backend: backend)
   end
@@ -60,14 +96,23 @@ class Ai::LegacyEnvConfig
       return unless token
 
       uri_base = openai_uri_base
+      # A regional OpenAI host (us.api.openai.com) is native OpenAI, not a custom server (#4836).
+      custom = Provider::Openai.custom_endpoint?(uri_base)
       provider = Provider::Registry.get_provider(:openai)
       endpoint = Ai::Config::Endpoint.new(
-        name: uri_base ? "openai_compatible" : "openai", protocol: :compatible, preset: (:openai unless uri_base),
-        base_url: uri_base, api_key: token, extra_headers: static_openai_headers, location: location_for(uri_base),
+        name: custom ? "openai_compatible" : "openai", protocol: :compatible, preset: (:openai unless custom),
+        base_url: uri_base, api_key: token, extra_headers: self.class.static_openai_headers, location: Ai::Config::Endpoint.location_for(uri_base),
         timeout_seconds: Provider::Openai.request_timeout, responses_api: provider&.supports_responses_endpoint? || false,
-        vector_store:
+        vector_store:, json_mode: self.class.openai_json_mode
       )
-      [ endpoint, provider && llm_model(endpoint, provider) ]
+      name = Provider::Openai.effective_model
+      flag = ENV["OPENAI_SUPPORTS_PDF_PROCESSING"]   # raw: set but empty was an opt-out, and stays one
+      vision = (flag.nil? || flag.downcase.in?(%w[true 1 yes])) &&
+               (custom || Provider::Openai::VISION_CAPABLE_MODEL_PREFIXES.any? { name.start_with?(_1) })
+      model = provider && llm_model(endpoint, provider, name, context_window: custom ? context_window : explicit_context_window,
+                                    max_output_tokens: positive(env("LLM_MAX_RESPONSE_TOKENS"), Setting.llm_max_response_tokens),
+                                    vision:, documents: vision && !custom)
+      [ endpoint, model ]
     end
 
     def anthropic
@@ -77,21 +122,44 @@ class Ai::LegacyEnvConfig
       base_url = env("ANTHROPIC_BASE_URL") || Setting.anthropic_base_url.presence
       provider = buildable(:anthropic) { Provider::Registry.get_provider(:anthropic) }
       endpoint = Ai::Config::Endpoint.new(
-        name: "anthropic", protocol: :anthropic, preset: (:anthropic unless base_url), base_url:, api_key: token,
-        location: location_for(base_url), timeout_seconds: ENV.fetch("ANTHROPIC_REQUEST_TIMEOUT", 600).to_i
+        name: "anthropic", protocol: :anthropic, preset: (:anthropic if anthropic_native?(base_url)), base_url:, api_key: token,
+        location: Ai::Config::Endpoint.location_for(base_url), timeout_seconds: ENV.fetch("ANTHROPIC_REQUEST_TIMEOUT", 600).to_i
       )
-      [ endpoint, provider && llm_model(endpoint, provider) ]
+      name = Provider::Anthropic.effective_model
+      vision = base_url.present? || Provider::Anthropic::VISION_CAPABLE_MODEL_PREFIXES.any? { name.to_s.start_with?(_1) }
+      model = provider && llm_model(endpoint, provider, name,
+                                    context_window: explicit_context_window,
+                                    max_output_tokens: positive(env("ANTHROPIC_MAX_TOKENS")) || ANTHROPIC_MAX_TOKENS,
+                                    vision:, documents: vision && anthropic_native?(base_url))
+      [ endpoint, model ]
     end
 
-    # What the providers accept: chat's prefix allow-list decides `tools` and `streaming`, and
-    # PDF support decides `vision` and `documents`. Every LLM model does structured output.
-    def llm_model(endpoint, provider)
-      name = provider.default_model
+    # What the providers accept: chat's prefix allow-list decides `tools` and `streaming`, and PDF
+    # support decides `vision` (a custom server is trusted with images unless
+    # OPENAI_SUPPORTS_PDF_PROCESSING is off, which also keeps it out of PDF import). `documents`, a
+    # PDF sent as a file, only where the provider reads one natively: Anthropic and OpenAI's own
+    # API. llama.cpp and Gemini's compatible API refuse RubyLLM's file part, and OpenRouter bills
+    # parsing it. Every LLM model does structured output.
+    def llm_model(endpoint, provider, name, context_window:, max_output_tokens:, vision:, documents:)
       capabilities = %i[structured_output]
       capabilities += %i[tools streaming] if provider.supports_model?(name)
-      capabilities += %i[vision documents] if provider.supports_pdf_processing?(model: name)
-      Ai::Config::Model.new(endpoint:, name:, capabilities:)
+      capabilities << :vision if vision
+      capabilities << :documents if documents
+      Ai::Config::Model.new(endpoint:, name:, capabilities:, context_window:, max_output_tokens:, batch_size:)
     end
+
+    # The deprecated budgets: on a custom server, Assistant::TokenBudget's window (2048 by default,
+    # a guard for small local models); the response cap only when someone set one; and
+    # LLM_MAX_ITEMS_PER_CALL items per call.
+    def context_window = Assistant::TokenBudget.context_window
+
+    # A cloud model's real window is far larger than the 2048 guard, which would split its batches
+    # into several calls, so native OpenAI and Anthropic are token-sliced only when one is set.
+    def explicit_context_window = positive(env("LLM_CONTEXT_WINDOW"), Setting.llm_context_window)
+
+    def batch_size = positive(env("LLM_MAX_ITEMS_PER_CALL"), Setting.llm_max_items_per_call) || Ai::Config::Model::DEFAULT_BATCH_SIZE
+
+    def positive(*values) = values.map(&:to_i).find(&:positive?)
 
     # Jev serves only families that chose it (Ai::Route#serves?), and only when it can be built:
     # its constructor refuses a cleartext endpoint off localhost.
@@ -103,7 +171,7 @@ class Ai::LegacyEnvConfig
       cloud = URI.parse(base_url).scheme == "https"
       endpoint = Ai::Config::Endpoint.new(
         name: "jev", protocol: :jev, preset: cloud ? :jev : :jev_local, base_url:, api_key: Provider::Jev.api_key,
-        location: location_for(base_url), timeout_seconds: ENV.fetch("JEV_REQUEST_TIMEOUT", 30).to_i
+        location: Ai::Config::Endpoint.location_for(base_url), timeout_seconds: ENV.fetch("JEV_REQUEST_TIMEOUT", 30).to_i
       )
       Ai::Config::Model.new(endpoint:, name: provider.default_model,
                             capabilities: cloud ? %i[judge calibrated_confidence] : %i[judge])
@@ -116,7 +184,7 @@ class Ai::LegacyEnvConfig
       allowed = env("EXTERNAL_ASSISTANT_ALLOWED_EMAILS").to_s.split(",").map { _1.strip.downcase }.compact_blank
       endpoint = Ai::Config::Endpoint.new(
         name: "external_assistant", protocol: :compatible, base_url: config.url, api_key: config.token,
-        location: location_for(config.url), timeout_seconds: EXTERNAL_ASSISTANT_TIMEOUT, agent: true,
+        location: Ai::Config::Endpoint.location_for(config.url), timeout_seconds: EXTERNAL_ASSISTANT_TIMEOUT, agent: true,
         agent_settings: { allowed_emails: allowed, agent_id: config.agent_id, session_key: config.session_key }
       )
       Ai::Config::Model.new(endpoint:, name: config.model)
@@ -145,13 +213,20 @@ class Ai::LegacyEnvConfig
       end
     end
 
+    # Anthropic's own API, written out or not: it keeps the preset, and with it the PDF limits.
+    def anthropic_native?(url)
+      url.blank? || URI.parse(url.to_s).host.to_s.casecmp?("api.anthropic.com")
+    rescue URI::InvalidURIError
+      false
+    end
+
     # The URL and key fall back to the OpenAI values saved in Settings too. The URL is used as
     # written, as VectorStore::Embeddable uses EMBEDDING_URI_BASE.
     def embedding_model
       base_url = env("EMBEDDING_URI_BASE") || openai_uri_base || VectorStore::DEFAULT_EMBEDDING_URI_BASE
       api_key = env("EMBEDDING_ACCESS_TOKEN") || env("OPENAI_ACCESS_TOKEN") || Setting.openai_access_token.presence
       endpoint = Ai::Config::Endpoint.new(
-        name: "embed", protocol: :compatible, base_url:, api_key:, location: location_for(base_url),
+        name: "embed", protocol: :compatible, base_url:, api_key:, location: Ai::Config::Endpoint.location_for(base_url),
         timeout_seconds: EMBEDDING_TIMEOUT, exact_base_url: true
       )
       Ai::Config::Model.new(
@@ -161,22 +236,10 @@ class Ai::LegacyEnvConfig
     end
 
     def route_list(feature, models, conditions: {})
-      models.map { |model| Ai::Route.new(feature:, model:, condition: conditions[model]) }
+      models.map { |model| Ai::Route.new(feature:, model:, prompt: self.class.prompt_for(feature, model.endpoint), condition: conditions[model]) }
     end
 
-    def openai_uri_base = env("OPENAI_URI_BASE") || Setting.openai_uri_base.presence
-
-    # Session-valued headers ({session_id}) are filled per chat request, so only chat sends them.
-    def static_openai_headers
-      Provider::Openai.extra_headers.reject { |_, value| value.include?("{session_id}") }
-    end
-
-    # http is a server on a private network; https, or no URL (the provider's own), is cloud.
-    def location_for(url)
-      url.present? && URI.parse(url).scheme == "http" ? :local : :cloud
-    rescue URI::InvalidURIError
-      :cloud
-    end
+    def openai_uri_base = self.class.openai_uri_base
 
     # Provider::Registry.preferred_llm_provider walks the same order and raises at a provider
     # that can't be built, so the providers after it are never reached and get no route.

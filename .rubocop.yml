@@ -36,7 +36,6 @@ Sure/NoAiEnv:
     - "app/models/provider/anthropic/auto_categorizer.rb"       # categorization
     - "app/models/provider/anthropic/auto_merchant_detector.rb" # merchant detection
     - "app/models/provider/anthropic/bank_statement_extractor.rb" # PDF import
-    - "app/models/provider/anthropic/bill_setup_suggester.rb"   # bill setup
     - "app/models/provider/anthropic/pdf_processor.rb"          # PDF import
     - "app/models/provider/anthropic/provider_merchant_enhancer.rb" # merchant enhancement
     - "app/models/provider/jev.rb"                              # Jev

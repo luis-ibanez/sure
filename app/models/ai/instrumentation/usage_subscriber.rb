@@ -11,7 +11,7 @@ class Ai::Instrumentation::UsageSubscriber
     case event.name
     when "usage.ruby_llm" then record_request(event.payload)
     when "request.ruby_llm" then record_request_error(event.payload)
-    else record_error(event.payload)
+    else record_call_end(event.payload)
     end
   rescue StandardError => error
     Rails.logger.error("[Ai::Instrumentation::UsageSubscriber] #{error.class}: #{error.message}")
@@ -19,8 +19,8 @@ class Ai::Instrumentation::UsageSubscriber
 
   private
     # The owner and the call's identity, as RubyLLM carried them into the event: both live in
-    # fiber storage, which threads started inside a call inherit, so the payload is complete even
-    # from such a thread.
+    # fiber storage, which Jev's pool threads inherit, so the payload is complete even from a
+    # fan-out thread.
     def owner_and_call(payload)
       [ payload[:owner], (payload[:workflow_metadata] || {}).to_h.stringify_keys ]
     end
@@ -49,6 +49,8 @@ class Ai::Instrumentation::UsageSubscriber
         estimated_cost: cost(tokens, model),
         metadata: {
           route: { endpoint: call["endpoint"], model: },
+          correlation_id: call["correlation_id"],
+          shadow: (true if call["shadow"] == "true"),
           tokens_unknown: (true unless tokens.known?)
         }.compact
       )
@@ -77,6 +79,23 @@ class Ai::Instrumentation::UsageSubscriber
     end
 
     def unexplained_failures(call_id) = LlmUsage.where(call_id:, status: "failed").where("NOT (metadata ? 'error')")
+
+    # The `.ai` event ends a call. `usage.ruby_llm` rows come from the HTTP requests,
+    # so only the event knows how the answering attempt stopped; the error attach follows.
+    def record_call_end(payload)
+      attach_finish_reason(payload)
+      record_error(payload)
+    end
+
+    # The answering request of the call: its newest succeeded row. A call whose
+    # every request failed has none, which is what the nil says.
+    def attach_finish_reason(payload)
+      call_id = payload[:call_id]
+      return if call_id.blank? || payload[:finish_reason].blank?
+
+      LlmUsage.where(call_id:, status: "succeeded").order(created_at: :desc, id: :desc).limit(1)
+              .update_all(finish_reason: payload[:finish_reason])
+    end
 
     def record_error(payload)
       return if payload[:error].blank? || payload[:call_id].blank? || payload[:family_id].blank?
