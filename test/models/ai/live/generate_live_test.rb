@@ -10,7 +10,8 @@ require "test_helper"
 class AiGenerateLiveTest < ActiveSupport::TestCase
   ROUTES = {
     "openai/gpt-4.1-mini" => { key: "OPENAI_ACCESS_TOKEN", protocol: :compatible, preset: :openai, responses_api: true },
-    "anthropic/claude-haiku-4-5" => { key: "ANTHROPIC_API_KEY", protocol: :anthropic },
+    # Recorded from this code, so its replay matches the whole body: the schema Anthropic was sent included.
+    "anthropic/claude-haiku-4-5" => { key: "ANTHROPIC_API_KEY", protocol: :anthropic, match: %i[method uri body] },
     "anthropic/claude-sonnet-5-5" => { key: "ANTHROPIC_API_KEY", protocol: :anthropic },
     "anthropic/claude-opus-5-5" => { key: "ANTHROPIC_API_KEY", protocol: :anthropic },
     "llama_cpp/qwen3.6-35b-a3b-mtp" => { key: "LLAMA_CPP_API_KEY", protocol: :compatible, json_mode: :auto,
@@ -55,7 +56,7 @@ class AiGenerateLiveTest < ActiveSupport::TestCase
         categories: [ "Entertainment" ], family: @family
       )
       # The model named in the body too, so a replay can't pass for a model the recording never asked for.
-      result = with_ai_cassette(preset, name, match: %i[method uri ai_model]) { generation.call(plan: plan_for(:bill_setup, preset, model_name, spec)) }
+      result = with_ai_cassette(preset, name, match: spec.fetch(:match, %i[method uri ai_model])) { generation.call(plan: plan_for(:bill_setup, preset, model_name, spec)) }
 
       assert result.success?, result.error&.message
       assert result.value[:name].present?, "two Netflix charges should name the bill"
