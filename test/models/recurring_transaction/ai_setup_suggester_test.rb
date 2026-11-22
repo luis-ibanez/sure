@@ -35,6 +35,21 @@ class RecurringTransaction::AiSetupSuggesterTest < ActiveSupport::TestCase
     assert_not_includes requests.first.instructions, "A current configuration is provided"
   end
 
+  # Bill setup has one route and runs on a click: a failure must not mark it down for the next click.
+  [ Ai::Error::Timeout, Ai::Error::RateLimited ].each do |error|
+    test "a click that failed with #{error.name.demodulize} doesn't lock bill setup out: the next one reaches the provider" do
+      Rails.stubs(:cache).returns(ActiveSupport::Cache::MemoryStore.new)
+      stub_ai(:bill_setup, raises: error.new("the provider failed"))
+      assert_raises(Suggester::Error) { Suggester.new(@family, user: @user).suggest_from_entries(@entries) }
+
+      requests = stub_ai(:bill_setup, returns: raw(name: "Gym"))
+      suggestion = Suggester.new(@family, user: @user).suggest_from_entries(@entries)
+
+      assert_equal 1, requests.size, "the second click reached the provider"
+      assert_equal "Gym", suggestion.name
+    end
+  end
+
   test "raises on empty charge history instead of asking the model to guess" do
     stub_provider(raw(name: "X"))
 
