@@ -72,12 +72,13 @@ class Ai::LegacyEnvConfig
     embed_model = embedding_model if %i[pgvector qdrant].include?(backend)
     embed_route_model = embed_route(backend, llm[:openai], embed_model)
 
-    # Both walk the LLM order and stop at a provider that can't be built. Generations list only the provider it picks, so failover never
-    # sends a family's data to a provider the install doesn't use; chat lists every provider the
-    # walk reaches, as it resolves its own provider.
+    # Every list walks the LLM order and stops at a provider that can't be built. Bill setup, on
+    # Ai::Generation, lists only the provider the walk picks first, as Provider::Registry did for
+    # it, so failover never sends a family's data to a provider the install doesn't use. The
+    # features still on their providers, and chat, list every provider the walk reaches.
     reached = reachable_llm_models(llm)
-    preferred = [ reached.first ].compact
-    routes = LLM_FEATURES.index_with { |feature| route_list(feature, preferred) }
+    routes = LLM_FEATURES.index_with { |feature| route_list(feature, reached) }
+    routes[:bill_setup] = route_list(:bill_setup, reached.first(1))
     routes[:chat] = route_list(:chat, reached + [ agent_model ].compact)
     routes[:categorize] = route_list(:categorize, [ jev_model, *reached ].compact, conditions: { jev_model => :jev_family })
     routes[:embed] = route_list(:embed, [ embed_route_model ].compact)

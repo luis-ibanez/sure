@@ -64,6 +64,7 @@ class Ai::Config::Endpoint < Data.define(:name, :protocol, :preset, :base_url, :
   end
 
   def local? = location == :local
+  def cloud? = location == :cloud
   def agent? = agent
   def vector_store? = vector_store
 

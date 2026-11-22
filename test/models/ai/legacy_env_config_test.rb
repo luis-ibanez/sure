@@ -32,7 +32,7 @@ class Ai::LegacyEnvConfigTest < ActiveSupport::TestCase
 
     assert_equal :openai, endpoint.preset
     assert_nil endpoint.base_url
-    assert_equal :cloud, endpoint.location
+    assert endpoint.cloud?
     assert endpoint.responses_api
     assert endpoint.vector_store?
     assert_equal 90, endpoint.timeout_seconds
@@ -79,15 +79,13 @@ class Ai::LegacyEnvConfigTest < ActiveSupport::TestCase
     assert_equal "gpt-4.1-mini", first_model(config, :bill_setup).name
   end
 
-  test "LLM_PROVIDER picks the generations' provider; chat and categorize list every reachable one after it" do
+  test "LLM_PROVIDER puts its provider first in every LLM route" do
     config = build("OPENAI_ACCESS_TOKEN" => "sk-test", "ANTHROPIC_API_KEY" => "ak-test", "LLM_PROVIDER" => "anthropic")
 
-    %i[bill_setup extract_pdf detect_merchants enhance_merchants].each do |feature|
-      assert_equal %w[anthropic], config.routes_for(feature).map { _1.endpoint.name }, feature
-    end
-    %i[categorize chat].each do |feature|
+    %i[extract_pdf detect_merchants enhance_merchants categorize chat].each do |feature|
       assert_equal %w[anthropic openai], config.routes_for(feature).map { _1.endpoint.name }, feature
     end
+    assert_equal %w[anthropic], config.routes_for(:bill_setup).map { _1.endpoint.name }, "bill setup uses the preferred provider only"
     assert_equal "claude-sonnet-4-6", first_model(config, :bill_setup).name
   end
 
