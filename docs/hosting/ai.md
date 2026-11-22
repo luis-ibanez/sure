@@ -1591,6 +1591,31 @@ and `auto` (the default) retries in `none` mode once more than half the results
 come back empty. Native OpenAI (strict schema) and Anthropic (forced tool use)
 enforce the shape server-side.
 
+#### Bill setup
+
+Bill setup (smart fill and smart configure on bills) runs on Sure's shared AI
+code, and follows the same settings as the other AI features:
+
+- **JSON mode.** On a custom OpenAI-compatible endpoint it follows
+  `LLM_JSON_MODE`. With `auto`, the default, it asks for a strict JSON schema,
+  then `json_object`, then no format, moving on when the server answers 400 to
+  the format or the answer doesn't parse. Blanks are a normal answer here.
+  Before, bill setup asked for `json_object` and dropped the format only on a 400.
+- **Native OpenAI** gets the strict schema through the Responses API
+  (`OPENAI_SUPPORTS_RESPONSES_ENDPOINT=false` turns it off), and **Anthropic**
+  native structured output with the same schema. Before, both took a single
+  Chat Completions request or a forced tool.
+- **Reply limit.** `LLM_MAX_RESPONSE_TOKENS`, when set, on OpenAI and
+  OpenAI-compatible endpoints; `ANTHROPIC_MAX_TOKENS` (default `4096`) on
+  Anthropic.
+- **One provider, no failover.** It uses the provider `LLM_PROVIDER` selects, as
+  before, and every click tries it: a failed call doesn't hold back the next one.
+- **Usage.** Its rows on the LLM Usage page are labelled `bill_setup` (they were
+  `suggest_bill_setup`), and record why each answer stopped (`finish_reason`).
+- **Upgrading.** Run the database migrations before starting the new version.
+  If the app runs first, bill setup still works, but its usage rows lack the stop
+  reason and each answered call logs one error until the migration has run.
+
 #### In code (the default every family starts from)
 
 1. Fork the repository
