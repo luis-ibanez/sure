@@ -129,7 +129,13 @@ module Ai::Transport::RubyLlmAdapter
       return klass.new(error.message, status:) if klass
 
       return Ai::Error::ModelMissing.new(error.message, status:) if missing_model?(status, body)
-      return Ai::Error.from_status(status || 400, error.message, body:) if error.is_a?(RubyLLM::Error)
+      if error.is_a?(RubyLLM::Error)
+        # Raised over a response RubyLLM accepted, or while parsing one (an embedding with no
+        # rows, a judgment it couldn't read), not over an HTTP error status.
+        return Ai::Error::InvalidOutput.new(error.message, status:) unless status.to_i.between?(400, 599)
+
+        return Ai::Error.from_status(status, error.message, body:)
+      end
 
       Ai::Error.from_exception(error)
     end
@@ -142,12 +148,23 @@ module Ai::Transport::RubyLlmAdapter
       status == 404 && error.is_a?(Hash) && error["type"] == "not_found_error" && error["message"].to_s.start_with?("model:")
     end
 
-    # RubyLLM 2.2 raises RubyLLM::ConnectionError (with `timeout?`) where 2.1.1 lets Faraday's
-    # errors through (RubyLLM #1407); Ai::Error.from_exception handles the 2.1.1 ones.
+    # RubyLLM wraps every connection failure in RubyLLM::ConnectionError, whose `timeout?`
+    # counts a connect timeout as one. Sure's contract splits them: no answer at all (refused,
+    # DNS, TLS, a connect timeout) is Unreachable and marks the server down; a server that
+    # accepted the request and went quiet is Timeout.
     def connection_error_class(error)
-      return unless defined?(RubyLLM::ConnectionError) && error.is_a?(RubyLLM::ConnectionError)
+      return unless error.is_a?(RubyLLM::ConnectionError)
 
-      error.respond_to?(:timeout?) && error.timeout? ? Ai::Error::Timeout : Ai::Error::Unreachable
+      error.timeout? && !connect_timeout?(error) ? Ai::Error::Timeout : Ai::Error::Unreachable
+    end
+
+    # A timeout raised while opening the connection: faraday-net_http wraps Net::OpenTimeout
+    # and Errno::ETIMEDOUT in Faraday::TimeoutError, so the Faraday class alone can't tell them
+    # apart.
+    def connect_timeout?(error)
+      cause = error.cause
+      cause = cause.wrapped_exception if cause.respond_to?(:wrapped_exception)
+      cause.is_a?(Net::OpenTimeout) || cause.is_a?(Errno::ETIMEDOUT)
     end
 
     # Declared to the model, never run: `Chat#generate` makes one request and doesn't run tools.

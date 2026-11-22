@@ -1,14 +1,12 @@
 # Who an AI call is for and what it belongs to, set around every transport call.
 # It's a thin layer over RubyLLM's documented scopes, so RubyLLM's own events carry it:
 #
-# - `RubyLLM.with_usage_owner(family)`: `usage.ruby_llm` carries the family as `owner`;
+# - `RubyLLM.with_owner(family)`: `usage.ruby_llm` carries the family as `owner`;
 # - `RubyLLM.workflow(name, id:, metadata:)`: every RubyLLM event carries `workflow_id` (the
 #   call id) and `workflow_metadata`.
 #
 # Sure keeps its own copy in fiber storage, which threads and fibers started inside inherit,
-# so `.ai` events and the OpenTelemetry processor never read RubyLLM's internals. RubyLLM
-# 2.1.1 keeps the workflow in Thread.current, which tool threads don't inherit; 2.2 moves it to
-# fiber storage (RubyLLM #1327).
+# so `.ai` events and the OpenTelemetry processor never read RubyLLM's internals.
 module Ai::CallContext
   CALL_KEY = :ai_call_context
 
@@ -32,7 +30,7 @@ module Ai::CallContext
     previous = Fiber[CALL_KEY]
     Fiber[CALL_KEY] = call
 
-    RubyLLM.with_usage_owner(family) do
+    RubyLLM.with_owner(family) do
       RubyLLM.workflow("ai.#{call.feature}", id: call.call_id, metadata: call.metadata) { yield call }
     end
   ensure

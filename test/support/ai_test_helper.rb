@@ -80,4 +80,17 @@ module AiTestHelper
   ensure
     ActiveSupport::Notifications.unsubscribe(subscriber) if subscriber
   end
+
+  # Opens the network for the block, for a live run against a real provider (AI_LIVE=1) or a
+  # recording run (RECORD_CASSETTES=1). Every other test runs with the network closed.
+  def with_ai_live
+    raise ArgumentError, "with_ai_live needs AI_LIVE=1 or RECORD_CASSETTES=1" unless ENV["AI_LIVE"] == "1" || ENV["RECORD_CASSETTES"] == "1"
+
+    config = WebMock::Config.instance
+    previous = [ config.allow_net_connect, config.allow_localhost, config.allow ]
+    WebMock.allow_net_connect!
+    VCR.turned_off(ignore_cassettes: true) { yield }
+  ensure
+    config.allow_net_connect, config.allow_localhost, config.allow = previous if previous
+  end
 end
