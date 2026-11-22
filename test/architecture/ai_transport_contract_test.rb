@@ -139,11 +139,12 @@ class AiTransportContractTest < ActiveSupport::TestCase
 
     test "#{protocol}: RubyLLM's requests get Sure's TLS settings" do
       Ai::Transport::Http.stubs(:faraday_ssl_options).returns(verify: false)
-      transport = Ai::Transport.for(endpoint(protocol))
-      # The Faraday connection RubyLLM's own requests use (Provider#connection is :nodoc:, read here only).
-      chat = transport.send(:ruby_llm_chat, ai_model(endpoint: endpoint(protocol)))
+      adapter = Ai::Transport.for(endpoint(protocol)).send(:ruby_llm_context).config.faraday_adapter
+      env = Faraday::Env.from(url: URI("https://self-hosted.example.test/v1"), request: Faraday::RequestOptions.new, ssl: Faraday::SSLOptions.new)
 
-      assert_equal false, chat.provider.connection.connection.ssl.verify
+      http = adapter.new.build_connection(env)
+
+      assert_equal OpenSSL::SSL::VERIFY_NONE, http.verify_mode
     end
 
     test "#{protocol}: one probe.ai event per call, with the route and the error class but never the key" do
@@ -179,7 +180,7 @@ class AiTransportContractTest < ActiveSupport::TestCase
   # request Sure's resolver sends direct. RubyLLM's adapter applies Sure's decision instead.
   test "RubyLLM's adapter connects as Sure's proxy resolver decides, port-qualified NO_PROXY included" do
     with_env_overrides("HTTP_PROXY" => "http://proxy.internal:8888", "HTTPS_PROXY" => nil, "NO_PROXY" => "10.0.0.5:8080") do
-      adapter = Ai::Transport::Http::ProxyNetHttp.new(->(_env) { })
+      adapter = Ai::Transport::Http::TlsNetHttp.new(->(_env) { })
       connect = ->(url) { adapter.send(:build_connection, Faraday::Env.from(url: URI(url), request: Faraday::RequestOptions.new)) }
 
       assert_not connect.("http://10.0.0.5:8080/v1/chat/completions").proxy?, "NO_PROXY's host:port goes direct"

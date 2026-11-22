@@ -97,22 +97,16 @@ class Ai::LegacyEnvConfig
       return unless token
 
       uri_base = openai_uri_base
-      # A regional OpenAI host (us.api.openai.com) is native OpenAI, not a custom server (#4836).
-      custom = Provider::Openai.custom_endpoint?(uri_base)
       provider = Provider::Registry.get_provider(:openai)
       endpoint = Ai::Config::Endpoint.new(
-        name: custom ? "openai_compatible" : "openai", protocol: :compatible, preset: (:openai unless custom),
+        name: uri_base ? "openai_compatible" : "openai", protocol: :compatible, preset: (:openai unless uri_base),
         base_url: uri_base, api_key: token, extra_headers: self.class.static_openai_headers, location: Ai::Config::Endpoint.location_for(uri_base),
         timeout_seconds: Provider::Openai.request_timeout, responses_api: provider&.supports_responses_endpoint? || false,
         vector_store:, json_mode: self.class.openai_json_mode
       )
-      name = Provider::Openai.effective_model
-      flag = ENV["OPENAI_SUPPORTS_PDF_PROCESSING"]   # raw: set but empty was an opt-out, and stays one
-      vision = (flag.nil? || flag.downcase.in?(%w[true 1 yes])) &&
-               (custom || Provider::Openai::VISION_CAPABLE_MODEL_PREFIXES.any? { name.start_with?(_1) })
-      model = provider && llm_model(endpoint, provider, name, context_window: custom ? context_window : explicit_context_window,
-                                    max_output_tokens: positive(env("LLM_MAX_RESPONSE_TOKENS"), Setting.llm_max_response_tokens),
-                                    vision:, documents: vision && !custom)
+      custom = Provider::Openai.custom_endpoint?(uri_base)
+      model = provider && llm_model(endpoint, provider, context_window: custom ? context_window : explicit_context_window,
+                                    max_output_tokens: positive(env("LLM_MAX_RESPONSE_TOKENS"), Setting.llm_max_response_tokens))
       [ endpoint, model ]
     end
 
@@ -123,29 +117,22 @@ class Ai::LegacyEnvConfig
       base_url = env("ANTHROPIC_BASE_URL") || Setting.anthropic_base_url.presence
       provider = buildable(:anthropic) { Provider::Registry.get_provider(:anthropic) }
       endpoint = Ai::Config::Endpoint.new(
-        name: "anthropic", protocol: :anthropic, preset: (:anthropic if anthropic_native?(base_url)), base_url:, api_key: token,
+        name: "anthropic", protocol: :anthropic, preset: (:anthropic unless base_url), base_url:, api_key: token,
         location: Ai::Config::Endpoint.location_for(base_url), timeout_seconds: ENV.fetch("ANTHROPIC_REQUEST_TIMEOUT", 600).to_i
       )
-      name = Provider::Anthropic.effective_model
-      vision = base_url.present? || Provider::Anthropic::VISION_CAPABLE_MODEL_PREFIXES.any? { name.to_s.start_with?(_1) }
-      model = provider && llm_model(endpoint, provider, name,
-                                    context_window: explicit_context_window,
-                                    max_output_tokens: positive(env("ANTHROPIC_MAX_TOKENS")) || ANTHROPIC_MAX_TOKENS,
-                                    vision:, documents: vision && anthropic_native?(base_url))
+      model = provider && llm_model(endpoint, provider, context_window: explicit_context_window,
+                                    max_output_tokens: positive(env("ANTHROPIC_MAX_TOKENS")) || ANTHROPIC_MAX_TOKENS)
       [ endpoint, model ]
     end
 
-    # What the providers accept: chat's prefix allow-list decides `tools` and `streaming`, and PDF
-    # support decides `vision` (a custom server is trusted with images unless
-    # OPENAI_SUPPORTS_PDF_PROCESSING is off, which also keeps it out of PDF import). `documents`, a
-    # PDF sent as a file, only where the provider reads one natively: Anthropic and OpenAI's own
-    # API. llama.cpp and Gemini's compatible API refuse RubyLLM's file part, and OpenRouter bills
-    # parsing it. Every LLM model does structured output.
-    def llm_model(endpoint, provider, name, context_window:, max_output_tokens:, vision:, documents:)
+    # What the providers accept: chat's prefix allow-list decides `tools` and `streaming`, and
+    # PDF support decides `vision` and `documents`. Every LLM model does structured output. The
+    # budgets are what generations read.
+    def llm_model(endpoint, provider, context_window:, max_output_tokens:)
+      name = provider.default_model
       capabilities = %i[structured_output]
       capabilities += %i[tools streaming] if provider.supports_model?(name)
-      capabilities << :vision if vision
-      capabilities << :documents if documents
+      capabilities += %i[vision documents] if provider.supports_pdf_processing?(model: name)
       Ai::Config::Model.new(endpoint:, name:, capabilities:, context_window:, max_output_tokens:, batch_size:)
     end
 
@@ -212,13 +199,6 @@ class Ai::LegacyEnvConfig
       when :qdrant
         embed_model
       end
-    end
-
-    # Anthropic's own API, written out or not: it keeps the preset, and with it the PDF limits.
-    def anthropic_native?(url)
-      url.blank? || URI.parse(url.to_s).host.to_s.casecmp?("api.anthropic.com")
-    rescue URI::InvalidURIError
-      false
     end
 
     # The URL and key fall back to the OpenAI values saved in Settings too. The URL is used as

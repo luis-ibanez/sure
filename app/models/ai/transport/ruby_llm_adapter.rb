@@ -33,25 +33,25 @@ module Ai::Transport::RubyLlmAdapter
     # - the proxy and TLS settings from Ai::Transport::Http, for every provider;
     # - no upload of large files to a provider's Files API, where a statement would stay;
     # - Sure's instrumenter, which every request passes (the attempt budget, each failed request's error);
-    # - split_think_tags: a Chat Completions model that opens with a think block sends its reasoning
-    #   separately, so the content this parses is the answer (the other protocols split thinking themselves).
-    def ruby_llm_context(timeout: endpoint.timeout_seconds)
+    # - split_think_tags, for generations only: a Chat Completions model that opens with a think
+    #   block sends its reasoning separately, so the content parsed is the answer, as the old
+    #   bill setup worker stripped think tags itself. Probes keep RubyLLM's default.
+    def ruby_llm_context(timeout: endpoint.timeout_seconds, split_think_tags: false)
       @ruby_llm_contexts ||= {}
-      @ruby_llm_contexts[timeout] ||= RubyLLM.context do |config|
+      @ruby_llm_contexts[[ timeout, split_think_tags ]] ||= RubyLLM.context do |config|
         config.request_timeout = timeout
         config.max_retries = 0
-        config.http_proxy = Ai::Transport::Http.proxy_or_warn(ruby_llm_api_base)
-        config.ssl = Ai::Transport::Http.faraday_ssl_options
-        config.faraday_adapter = Ai::Transport::Http::ProxyNetHttp   # RubyLLM's config can't force a direct connection
+        config.http_proxy = Ai::Transport::Http.proxy_for(ruby_llm_api_base)
+        config.faraday_adapter = Ai::Transport::Http.ruby_llm_adapter
         config.auto_upload_large_files = false
-        config.split_think_tags = true
+        config.split_think_tags = split_think_tags
         config.instrumenter = Ai::Transport::Instrumenter.new(config.instrumenter, map_error: method(:mapped_error), scrub: scrubber)
         configure_provider(config)
       end
     end
 
-    def ruby_llm_chat(model, timeout: endpoint.timeout_seconds)
-      ruby_llm_context(timeout:)
+    def ruby_llm_chat(model, timeout: endpoint.timeout_seconds, split_think_tags: false)
+      ruby_llm_context(timeout:, split_think_tags:)
         .chat(model: model.name, provider: ruby_llm_provider, protocol: ruby_llm_protocol, assume_model_exists: true)
         .with_headers(Ai::Transport::Http.headers(endpoint))
     end
@@ -62,7 +62,8 @@ module Ai::Transport::RubyLlmAdapter
     # [text, Ai::Tokens, finish reason]. A fallback request gets only what's left of the
     # call's budget, so the call's fallbacks can't outlast it.
     def complete_json(request, schema: true, response_format: nil, effort: nil, provider_options: {})
-      chat = ruby_llm_chat(request.model, timeout: within_budget(endpoint.timeout_seconds)).with_instructions(request.instructions)
+      chat = ruby_llm_chat(request.model, timeout: within_budget(endpoint.timeout_seconds), split_think_tags: true)
+               .with_instructions(request.instructions)
       chat.with_max_output_tokens(request.model.max_output_tokens) if request.model.max_output_tokens
       chat.with_schema(name: request.schema_name, schema: request.schema, strict: true) if schema
       chat.with_thinking(effort:) if effort
