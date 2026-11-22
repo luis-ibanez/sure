@@ -54,7 +54,8 @@ class AiGenerateLiveTest < ActiveSupport::TestCase
         charges: [ { date: "2026-09-03", amount: "15.49", name: "NETFLIX.COM" }, { date: "2026-10-03", amount: "15.49", name: "NETFLIX.COM" } ],
         categories: [ "Entertainment" ], family: @family
       )
-      result = with_ai_cassette(preset, name) { generation.call(plan: plan_for(:bill_setup, preset, model_name, spec)) }
+      # The model named in the body too, so a replay can't pass for a model the recording never asked for.
+      result = with_ai_cassette(preset, name, match: %i[method uri ai_model]) { generation.call(plan: plan_for(:bill_setup, preset, model_name, spec)) }
 
       assert result.success?, result.error&.message
       assert result.value[:name].present?, "two Netflix charges should name the bill"

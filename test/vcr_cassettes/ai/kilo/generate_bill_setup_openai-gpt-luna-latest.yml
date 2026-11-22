@@ -84,11 +84,6 @@ http_interactions:
       - strict-origin-when-cross-origin
       Server:
       - Vercel
-      Set-Cookie:
-      - _vcrr_29a0f54ab1d200c5=dpl_E5WZ2EhqVY1ht53HvMmB4JXcEdBh|0.4797; Path=/; Secure;
-        HttpOnly; SameSite=None
-      - _vcrr_99197b56da7577df=dpl_7g9fgyVjZm2sDWzdv6Szf54uyXDw|0.984; Path=/; Secure;
-        HttpOnly; SameSite=None
       Strict-Transport-Security:
       - max-age=31536000; includeSubDomains
       X-Content-Type-Options:
@@ -125,6 +120,6 @@ http_interactions:
         short sentence.\n\nOutput JSON only, exactly this shape (no markdown, no explanation):\n{\"name\":
         ..., \"amount\": ..., \"frequency\": ..., \"day_of_month\": ..., \"weekday\":
         ...,\n \"month_of_year\": ..., \"category_name\": ..., \"bill_type\": ...,
-        \"autopay\": ...,\n \"confidence\": ..., \"rationale\": ...}\n","previous_response_id":null,"temperature":1,"top_p":1,"max_output_tokens":1024,"presence_penalty":0,"frequency_penalty":0,"top_logprobs":0,"tools":[],"tool_choice":"auto","parallel_tool_calls":true,"max_tool_calls":null,"text":{"format":{"type":"json_schema","name":"bill_setup_suggestion","schema":{"type":"object","properties":{"name":{"type":["string","null"]},"amount":{"type":["number","null"]},"frequency":{"type":["string","null"],"enum":["monthly","weekly","biweekly","semimonthly","quarterly","semiannual","annual",null]},"day_of_month":{"type":["integer","null"],"minimum":1,"maximum":31},"weekday":{"type":["integer","null"],"minimum":0,"maximum":6},"month_of_year":{"type":["integer","null"],"minimum":1,"maximum":12},"category_name":{"type":["string","null"]},"bill_type":{"type":["string","null"],"enum":["bill","subscription","installment",null]},"autopay":{"type":["boolean","null"]},"confidence":{"type":["number","null"]},"rationale":{"type":["string","null"]}},"required":["name","amount","frequency","day_of_month","weekday","month_of_year","category_name","bill_type","autopay","confidence","rationale"],"additionalProperties":false},"strict":true}},"truncation":"disabled","reasoning":{"summary":"auto"},"store":false,"background":false,"service_tier":"default","metadata":{},"safety_identifier":"43amqyVw3j6pyw01k5oGXRnje58bALy0nanLB/naNFI=","prompt_cache_key":null,"prompt_cache_retention":null}'
+        \"autopay\": ...,\n \"confidence\": ..., \"rationale\": ...}\n","previous_response_id":null,"temperature":1,"top_p":1,"max_output_tokens":1024,"presence_penalty":0,"frequency_penalty":0,"top_logprobs":0,"tools":[],"tool_choice":"auto","parallel_tool_calls":true,"max_tool_calls":null,"text":{"format":{"type":"json_schema","name":"bill_setup_suggestion","schema":{"type":"object","properties":{"name":{"type":["string","null"]},"amount":{"type":["number","null"]},"frequency":{"type":["string","null"],"enum":["monthly","weekly","biweekly","semimonthly","quarterly","semiannual","annual",null]},"day_of_month":{"type":["integer","null"],"minimum":1,"maximum":31},"weekday":{"type":["integer","null"],"minimum":0,"maximum":6},"month_of_year":{"type":["integer","null"],"minimum":1,"maximum":12},"category_name":{"type":["string","null"]},"bill_type":{"type":["string","null"],"enum":["bill","subscription","installment",null]},"autopay":{"type":["boolean","null"]},"confidence":{"type":["number","null"]},"rationale":{"type":["string","null"]}},"required":["name","amount","frequency","day_of_month","weekday","month_of_year","category_name","bill_type","autopay","confidence","rationale"],"additionalProperties":false},"strict":true}},"truncation":"disabled","reasoning":{"summary":"auto"},"store":false,"background":false,"service_tier":"default","metadata":{},"safety_identifier":null,"prompt_cache_key":null,"prompt_cache_retention":null}'
   recorded_at: Thu, 12 Nov 2026 11:10:03 GMT
 recorded_with: VCR 6.3.1

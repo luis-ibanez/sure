@@ -257,7 +257,7 @@ class AiTransportGenerateTest < ActiveSupport::TestCase
     assert_equal 1, schema.dig(:properties, :day, :minimum), "the generation's own schema keeps its limits"
   end
 
-  test "Anthropic gets a nullable enum as anyOf its values and null, which it accepts" do
+  test "Anthropic is sent a nullable enum as anyOf its values and null" do
     requests = stub_json(MESSAGES_URL, [ 200, anthropic_answer({ frequency: nil, weekday: 2 }) ])
     endpoint = ai_endpoint(name: "anthropic", protocol: :anthropic, base_url: "https://anthropic.example.test")
     schema = { type: "object",
