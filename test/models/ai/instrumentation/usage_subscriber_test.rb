@@ -169,6 +169,20 @@ class Ai::Instrumentation::UsageSubscriberTest < ActiveSupport::TestCase
     assert_nothing_raised { run_call(feature: :bill_setup) }
   end
 
+  # RubyLLM 2.2 keeps the usage owner and the workflow in fiber storage, which a thread started
+  # inside the call inherits, so its request is recorded for the call's family.
+  test "a request from a thread started inside a call is recorded for the call's family" do
+    stub_request(:post, URL).to_return(status: 200, body: OK.to_json, headers: json)
+
+    call_id = Ai::CallContext.call(feature: :bill_setup, model: @model, family: @family, budget: 30) do |call|
+      Thread.new { @transport.send(:attempt) { @transport.send(:probe_chat, @model) } }.join
+      call.call_id
+    end
+
+    row = @family.llm_usages.find_by!(call_id:)
+    assert_equal [ "bill_setup", "succeeded" ], [ row.operation, row.status ]
+  end
+
   private
     def json = { "Content-Type" => "application/json" }
 
