@@ -65,6 +65,17 @@ class RecurringTransactions::SmartFillsControllerTest < ActionDispatch::Integrat
       { count: 1 }, "the entry's own prefill must survive a failed suggestion"
   end
 
+  test "an error outside the AI layer keeps the plain prefill and explains, as a provider failure does" do
+    Ai::Prompt.stubs(:for).raises(NameError, "undefined local variable or method 'charges'")
+
+    post smart_fill_recurring_transactions_url(entry_id: @entry.id),
+         headers: { "Turbo-Frame" => "modal" }
+
+    assert_response :success
+    assert_match "Could not analyze the charge history", response.body
+    assert_select "input[name=?][value=?]", "recurring_transaction[name]", "GYM MEMBERSHIP", { count: 1 }
+  end
+
   test "sent back with the reason when no model is set up for bills" do
     use_no_ai
 

@@ -51,9 +51,15 @@ class RecurringTransaction
       def run(charges:, current_config:)
         raise Error, "No charge history to analyze" if charges.empty?
 
-        result = Ai::Generations::SuggestBillSetup.new(
-          charges:, categories: family.categories.pluck(:name), current_config:, family:, user:
-        ).call(down_marks: false)
+        result = begin
+          Ai::Generations::SuggestBillSetup.new(
+            charges:, categories: family.categories.pluck(:name), current_config:, family:, user:
+          ).call(down_marks: false)
+        rescue StandardError => error
+          # The generation turns AI errors into a failed result; anything else (a prompt that
+          # doesn't render) is a failed suggestion too, not a 500.
+          raise Error, "Provider failed: #{error.class}: #{error.message}"
+        end
 
         raise Error, "Bill setup is unavailable: #{result.availability.reason}" if result.unavailable?
         raise Error, "Provider failed: #{result.error.message}" unless result.success?
