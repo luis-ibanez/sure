@@ -169,6 +169,20 @@ class Ai::Instrumentation::UsageSubscriberTest < ActiveSupport::TestCase
     assert_nothing_raised { run_call(feature: :bill_setup) }
   end
 
+  test "a failed call keeps its error when the finish reason can't be written" do
+    call_id = SecureRandom.uuid
+    row = @family.llm_usages.create!(provider: "openai", model: "gpt-4.1", operation: "bill_setup", status: "failed", call_id:,
+                                     prompt_tokens: 0, completion_tokens: 0, total_tokens: 0, estimated_cost: 0)
+    subscriber = Ai::Instrumentation::UsageSubscriber.new
+    # As before the finish_reason migration runs: the column isn't there.
+    subscriber.stubs(:attach_finish_reason).raises(ActiveRecord::StatementInvalid, "PG::UndefinedColumn: finish_reason")
+    payload = { call_id:, family_id: @family.id, error: "Ai::Error::Timeout", error_message: "timed out", finish_reason: "length" }
+
+    subscriber.call(ActiveSupport::Notifications::Event.new("generate.ai", nil, nil, "e1", payload))
+
+    assert_equal "timed out", row.reload.metadata["error"]
+  end
+
   private
     def json = { "Content-Type" => "application/json" }
 

@@ -81,10 +81,11 @@ class Ai::Instrumentation::UsageSubscriber
     def unexplained_failures(call_id) = LlmUsage.where(call_id:, status: "failed").where("NOT (metadata ? 'error')")
 
     # The `.ai` event ends a call. `usage.ruby_llm` rows come from the HTTP requests,
-    # so only the event knows how the answering attempt stopped; the error attach follows.
+    # so only the event knows how the answering attempt stopped. The error is attached first, so
+    # a finish reason that can't be written (its column not migrated yet) doesn't drop it.
     def record_call_end(payload)
-      attach_finish_reason(payload)
       record_error(payload)
+      attach_finish_reason(payload)
     end
 
     # The answering request of the call: its newest succeeded row. A call whose
