@@ -67,13 +67,34 @@ class AiTransportGenerateTest < ActiveSupport::TestCase
     assert_equal 1, requests.size
   end
 
-  test "a 400 about the JSON mode retries once in none mode without the effort" do
+  test "a 400 about the JSON mode moves auto on to json_object without the effort" do
     requests = stub_chat(error(400, "'response_format.type' must be 'json_schema' or 'text'"), answer(FULL))
 
     response = generate(json_mode: :auto, reasoning_effort: "high")
 
-    assert_equal [ "json_schema", nil ], requests.map { _1.dig("response_format", "type") }
+    assert_equal [ "json_schema", "json_object" ], requests.map { _1.dig("response_format", "type") }
     assert_equal [ "high", nil ], requests.map { _1["reasoning_effort"] }
+    assert_equal :json_object, response.json_mode
+  end
+
+  # Main's bill setup asked custom servers for json_object, and sent no format only when that got
+  # a 400: json_object is the safety net for a server that has no strict json_schema.
+  test "auto on a server that refuses json_schema with a 400 asks for json_object next" do
+    requests = stub_chat(error(400, "response_format type json_schema is not supported"), answer(FULL))
+
+    response = generate(json_mode: :auto)
+
+    assert_equal %w[json_schema json_object], requests.map { _1.dig("response_format", "type") }
+    assert_equal :json_object, response.json_mode
+  end
+
+  test "auto on a server that refuses json_schema and json_object sends no format" do
+    requests = stub_chat(error(400, "response_format type json_schema is not supported"),
+                         error(400, "response_format type json_object is not supported"), answer(FULL))
+
+    response = generate(json_mode: :auto)
+
+    assert_equal [ "json_schema", "json_object", nil ], requests.map { _1.dig("response_format", "type") }
     assert_equal :none, response.json_mode
   end
 

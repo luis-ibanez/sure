@@ -5,8 +5,9 @@
 #   moves on when the answer doesn't parse or, for batched features, when more than half the
 #   items came back blank or missing, keeping the reasoning effort. An explicit mode stays,
 #   apart from the 400 retry below.
-# - A 400 about the JSON mode or the effort is retried once in `none` mode without the effort
-#   (#3605). So is any 400 to a request that sent an effort: Gemini refuses an effort it doesn't
+# - A 400 about the JSON mode or the effort is retried without the effort (#3605): in `auto`, a
+#   strict request moves on to json_object, which custom servers were asked for before, then
+#   none; any other mode is retried once in `none`. So is any 400 to a request that sent an effort: Gemini refuses an effort it doesn't
 #   take with "Request contains an invalid argument", which names neither (seen live). A 400 about
 #   anything else (an attachment, a missing model) ends the call, after that one retry if an
 #   effort was sent: the next mode would resend the same request. OpenRouter's "reasoning is
@@ -31,7 +32,6 @@ module Ai::Transport::JsonMode
       modes = CHAINS.fetch(request.json_mode)
       effort = request.reasoning_effort
       usage = nil
-      retried = false
       index = 0
 
       while index < modes.size
@@ -40,11 +40,10 @@ module Ai::Transport::JsonMode
         begin
           text, tokens, finish_reason = attempt { complete_in_mode(request, mode, effort) }
         rescue Ai::Error::Refused => error
-          raise unless rejection?(error, effort) && !retried && (mode != :none || effort)
+          raise unless rejection?(error, effort) && (mode != :none || effort)
 
-          retried = true
           effort = nil
-          modes = %i[none]
+          modes = mode == :strict && request.json_mode == :auto ? modes.drop(index + 1) : %i[none]
           index = 0
           next
         end
