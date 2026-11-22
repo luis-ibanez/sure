@@ -1,0 +1,96 @@
+---
+http_interactions:
+- request:
+    method: post
+    uri: https://api.anthropic.com/v1/messages
+    body:
+      encoding: UTF-8
+      string: '{"model":"claude-haiku-4-5-20251001","messages":[{"role":"user","content":[{"type":"text","text":"CHARGE
+        HISTORY (date amount description):\n- 2026-09-03 15.49 NETFLIX.COM\n- 2026-10-03
+        15.49 NETFLIX.COM\n\nAVAILABLE CATEGORIES: Entertainment"}]}],"stream":false,"max_tokens":1024,"system":[{"type":"text","text":"You
+        configure recurring-bill records for a personal finance app. Given the dated\ncharge
+        history for one obligation, propose the bill''s configuration.\n\nRules:\n-
+        Infer the cadence from the gaps between the dates, never from the row count.\n  Use
+        \"once\" only for a single charge with no repeating gap.\n- amount is the
+        typical recent charge as a positive number; when amounts drift,\n  prefer
+        the most recent ones.\n- day_of_month is the modal charge day (monthly-style
+        cadences only); weekday\n  only for weekly/biweekly; month_of_year only for
+        annual.\n- bill_type: \"subscription\" for digital services and memberships,
+        \"installment\"\n  for finite payment plans, otherwise \"bill\".\n- autopay
+        true only when the history shows automatic-payment markers.\n- Set any field
+        the history cannot support to null. Never guess.\n- confidence is 0 to 1 for
+        the proposal overall; rationale is one short sentence.\n"}],"output_config":{"format":{"type":"json_schema","schema":{"type":"object","properties":{"name":{"type":["string","null"]},"amount":{"type":["number","null"]},"frequency":{"anyOf":[{"type":"string","enum":["once","monthly","weekly","biweekly","semimonthly","quarterly","semiannual","annual"]},{"type":"null"}]},"day_of_month":{"type":["integer","null"],"description":"minimum
+        1, maximum 31"},"weekday":{"type":["integer","null"],"description":"minimum
+        0, maximum 6"},"month_of_year":{"type":["integer","null"],"description":"minimum
+        1, maximum 12"},"category_name":{"type":["string","null"]},"bill_type":{"anyOf":[{"type":"string","enum":["bill","subscription","installment"]},{"type":"null"}]},"autopay":{"type":["boolean","null"]},"confidence":{"type":["number","null"]},"rationale":{"type":["string","null"]}},"required":["name","amount","frequency","day_of_month","weekday","month_of_year","category_name","bill_type","autopay","confidence","rationale"],"additionalProperties":false}}}}'
+    headers:
+      User-Agent:
+      - Faraday v2.15.1
+      X-Api-Key:
+      - "<ANTHROPIC_API_KEY>"
+      Anthropic-Version:
+      - '2023-06-01'
+      Content-Type:
+      - application/json
+      Accept-Encoding:
+      - gzip;q=1.0,deflate;q=0.6,identity;q=0.3
+      Accept:
+      - "*/*"
+  response:
+    status:
+      code: 200
+      message: OK
+    headers:
+      Date:
+      - Sun, 22 Nov 2026 21:59:14 GMT
+      Content-Type:
+      - application/json
+      Transfer-Encoding:
+      - chunked
+      Connection:
+      - keep-alive
+      Anthropic-Ratelimit-Input-Tokens-Limit:
+      - '2000000'
+      Anthropic-Ratelimit-Input-Tokens-Remaining:
+      - '2000000'
+      Anthropic-Ratelimit-Input-Tokens-Reset:
+      - '2026-11-22T21:59:13Z'
+      Anthropic-Ratelimit-Output-Tokens-Limit:
+      - '400000'
+      Anthropic-Ratelimit-Output-Tokens-Remaining:
+      - '400000'
+      Anthropic-Ratelimit-Output-Tokens-Reset:
+      - '2026-11-22T21:59:14Z'
+      Anthropic-Ratelimit-Requests-Limit:
+      - '1000'
+      Anthropic-Ratelimit-Requests-Remaining:
+      - '999'
+      Anthropic-Ratelimit-Requests-Reset:
+      - '2026-11-22T21:59:12Z'
+      Anthropic-Ratelimit-Tokens-Limit:
+      - '2400000'
+      Anthropic-Ratelimit-Tokens-Remaining:
+      - '2400000'
+      Anthropic-Ratelimit-Tokens-Reset:
+      - '2026-11-22T21:59:13Z'
+      Strict-Transport-Security:
+      - max-age=31536000; includeSubDomains; preload
+      Vary:
+      - Accept-Encoding
+      Content-Security-Policy:
+      - default-src 'none'; frame-ancestors 'none'
+      Server:
+      - cloudflare
+      Server-Timing:
+      - x-originResponse;dur=2513
+      Cf-Cache-Status:
+      - DYNAMIC
+      X-Robots-Tag:
+      - none
+    body:
+      encoding: ASCII-8BIT
+      string: '{"model":"claude-haiku-4-5-20251001","id":"msg_011ChJiYNu9WqwKnSgn2yzKv","type":"message","role":"assistant","content":[{"type":"text","text":"{\"name\":\"Netflix\",\"amount\":15.49,\"frequency\":\"monthly\",\"day_of_month\":3,\"weekday\":null,\"month_of_year\":null,\"category_name\":\"Entertainment\",\"bill_type\":\"subscription\",\"autopay\":null,\"confidence\":0.85,\"rationale\":\"Two
+        charges exactly 30 days apart on the 3rd suggest a monthly Netflix subscription;
+        autopay status unclear from history alone.\"}"}],"container":null,"stop_reason":"end_turn","stop_sequence":null,"stop_details":null,"usage":{"input_tokens":955,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0},"output_tokens":93,"service_tier":"standard","inference_geo":"not_available","speed":"standard"},"diagnostics":null}'
+  recorded_at: Sun, 22 Nov 2026 21:59:14 GMT
+recorded_with: VCR 6.3.1

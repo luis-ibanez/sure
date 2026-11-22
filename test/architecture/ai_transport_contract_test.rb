@@ -64,6 +64,14 @@ class AiTransportContractTest < ActiveSupport::TestCase
       assert_raises(Ai::Error::Timeout) { probe(protocol, :chat) }
     end
 
+    # Deliberately fail-fast: Retry is for a server that answered, not for one that never did.
+    test "#{protocol}: an unreachable server is never retried, whatever the retry budget" do
+      stub_request(:post, spec[:url]).to_raise(Errno::ECONNREFUSED)
+
+      assert_raises(Ai::Error::Unreachable) { probe(protocol, :chat, max_retries: 3) }
+      assert_requested :post, spec[:url], times: 1
+    end
+
     test "#{protocol}: retries follow the endpoint, not RubyLLM's defaults" do
       Ai::Transport::Base.any_instance.stubs(:retry_delay).returns(0)
       stub_request(:post, spec[:url]).to_return(status: 503, headers: JSON_HEADERS, body: spec[:error].call("unavailable").to_json)
@@ -158,7 +166,7 @@ class AiTransportContractTest < ActiveSupport::TestCase
         assert_equal "http://proxy.internal:8888", transport.send(:ruby_llm_context).config.http_proxy
         # The proxy RubyLLM's own Faraday connection uses (Provider#connection is :nodoc:, read here only).
         chat = transport.send(:ruby_llm_chat, ai_model(endpoint: endpoint(protocol)))
-        assert_equal "http://proxy.internal:8888", chat.instance_variable_get(:@provider).connection.connection.proxy.uri.to_s
+        assert_equal "http://proxy.internal:8888", chat.provider.connection.connection.proxy.uri.to_s
 
         host = URI(spec[:url]).host
         with_env_overrides("NO_PROXY" => host) do
@@ -222,7 +230,7 @@ class AiTransportContractTest < ActiveSupport::TestCase
     assert_raises(Ai::Error::InvalidOutput) { probe(:compatible, :chat) }
   end
 
-  test "an embedding endpoint with static headers is refused, since RubyLLM 2.1.1 can't send them" do
+  test "an embedding endpoint with static headers is refused, since RubyLLM can't send them" do
     model_endpoint = ai_endpoint(name: "embed", base_url: "https://llm.example.test/v1", extra_headers: { "X-Gateway-Key" => "k" })
 
     assert_raises(Ai::Error::Refused) { Ai::Transport.for(model_endpoint).probe(ai_model(endpoint: model_endpoint), :embedding) }
@@ -255,15 +263,117 @@ class AiTransportContractTest < ActiveSupport::TestCase
   # RubyLLM hides internal helpers from its documented API between releases (RubyLLM #1438). These are
   # the public methods Sure relies on; an upgrade that drops one fails here, not in production.
   test "the RubyLLM surface Sure uses is still public" do
-    { RubyLLM => %i[context workflow with_usage_owner], RubyLLM::OpenTelemetry => %i[enable] }.each do |owner, methods|
+    { RubyLLM => %i[context workflow with_owner render_prompt], RubyLLM::OpenTelemetry => %i[enable] }.each do |owner, methods|
       methods.each { assert owner.respond_to?(_1), "RubyLLM.#{_1}" }
     end
-    { RubyLLM::Context => %i[chat embed], RubyLLM::Chat => %i[generate add_message with_headers with_max_output_tokens with_tools],
-      RubyLLM::Message => %i[content model tokens cost tool_calls], RubyLLM::ToolCall => %i[name arguments], RubyLLM::Embedding => %i[vectors],
-      RubyLLM::Tokens => %i[input output cache_read cache_write reported_cost] }.each do |klass, methods|
+    { RubyLLM::Context => %i[chat embed judge ocr],
+      RubyLLM::Judgment => %i[answers tokens model []], RubyLLM::Choice => %i[choice probabilities confidence to_h],
+      RubyLLM::Chat => %i[generate add_message with_headers with_max_output_tokens with_tools with_instructions with_schema
+                          with_thinking with_provider_options],
+      RubyLLM::Message => %i[content model tokens cost tool_calls finish_reason raw], RubyLLM::ToolCall => %i[name arguments],
+      RubyLLM::Embedding => %i[vectors],
+      RubyLLM::Tokens => %i[input output cache_read cache_write reported_cost],
+      RubyLLM::Attachment => %i[filename mime_type resolution] }.each do |klass, methods|
       methods.each { assert klass.public_method_defined?(_1), "#{klass}##{_1}" }
     end
+    assert_includes RubyLLM::Attachment::RESOLUTIONS, :high
     assert_kind_of RubyLLM::Error, RubyLLM::PaymentRequiredError.new
+    assert_includes RubyLLM::Configuration.instance_methods, :typesafe_api_base=
+    assert_includes RubyLLM::Configuration.instance_methods, :typesafe_api_key=
+  end
+
+  test "compatible base URLs follow ruby-openai's rule, so today's URLs keep working" do
+    {
+      nil => "https://api.openai.com/v1",
+      "http://llm:8080" => "http://llm:8080/v1",
+      "http://llm:8080/" => "http://llm:8080/v1",
+      "http://ollama:11434/v1/" => "http://ollama:11434/v1",
+      "https://generativelanguage.googleapis.com/v1beta/openai/" => "https://generativelanguage.googleapis.com/v1beta/openai",
+      "https://api.cloudflare.com/client/v4/accounts/a/ai/v1" => "https://api.cloudflare.com/client/v4/accounts/a/ai/v1",
+      "https://api.cloudflare.com/client/v4/accounts/a/ai" => "https://api.cloudflare.com/client/v4/accounts/a/ai/v1",
+      "http://agent:18789/v1/chat/completions" => "http://agent:18789/v1",
+      "http://v1-proxy.lan:8080" => "http://v1-proxy.lan:8080",
+      "https://gateway.ai.cloudflare.com/v1/acct/gw/compat" => "https://gateway.ai.cloudflare.com/v1/acct/gw/compat",
+      "https://envoy.example.com/v13" => "https://envoy.example.com/v13"
+    }.each do |given, expected|
+      assert_equal expected, Ai::Transport::Http.compatible_base(given), given.inspect
+    end
+  end
+
+  test "NO_PROXY matches the host as written, with CIDR blocks" do
+    env = { "HTTPS_PROXY" => "http://proxy.internal:8888", "NO_PROXY" => "llm.lan,10.0.0.0/8" }
+
+    assert_nil Ai::Transport::Http.proxy_for("http://llm.lan:8080", env:)
+    assert_nil Ai::Transport::Http.proxy_for("http://10.72.200.61:8180", env:)
+    assert_equal "http://proxy.internal:8888", Ai::Transport::Http.proxy_for("http://other.lan:8080", env:)
+  end
+
+  test "a host named by DNS goes direct when its address is in a NO_PROXY CIDR block" do
+    IPSocket.stubs(:getaddress).with("llm.internal").returns("10.72.200.61")
+    env = { "HTTPS_PROXY" => "http://proxy.internal:8888", "NO_PROXY" => "10.0.0.0/8" }
+
+    assert_nil Ai::Transport::Http.proxy_for("http://llm.internal:8180", env:)
+    IPSocket.stubs(:getaddress).with("api.openai.com").returns("162.159.140.245")
+    assert_equal "http://proxy.internal:8888", Ai::Transport::Http.proxy_for("https://api.openai.com", env:)
+  end
+
+  test "a name is never resolved when NO_PROXY lists only names" do
+    IPSocket.expects(:getaddress).never
+
+    assert_nil Ai::Transport::Http.proxy_for("http://llm.lan:8080", env: { "HTTPS_PROXY" => "http://proxy.internal:8888", "NO_PROXY" => "llm.lan" })
+  end
+
+  test "a NO_PROXY entry with a leading dot covers the domain itself and its subdomains" do
+    env = { "HTTPS_PROXY" => "http://proxy.internal:8888", "NO_PROXY" => "other.test, .agents.example.com" }
+
+    assert_nil Ai::Transport::Http.proxy_for("https://agents.example.com", env:)
+    assert_nil Ai::Transport::Http.proxy_for("https://eu.agents.example.com", env:)
+    assert_equal "http://proxy.internal:8888", Ai::Transport::Http.proxy_for("https://badagents.example.com", env:)
+  end
+
+  test "a server without a vision projector refusing images is UnsupportedInput, a refusal, not an outage" do
+    message = "image input is not supported - hint: if this is unexpected, you may need to provide the mmproj"   # llama.cpp, Ollama
+
+    assert_equal Ai::Error::UnsupportedInput, Ai::Error.for_status(500, message)
+    assert_equal Ai::Error::UnsupportedInput, Ai::Error.for_status(500, nil, body: { "error" => { "code" => 500, "message" => message } })
+    assert_equal Ai::Error::UnsupportedInput, Ai::Error.for_status(500, nil, body: { "error" => { "message" => message } }.to_json)
+    # Some servers put the message directly under "error" rather than in an object.
+    assert_equal Ai::Error::UnsupportedInput, Ai::Error.for_status(500, nil, body: { "error" => message })
+    assert_equal Ai::Error::UnsupportedInput, Ai::Error.for_status(500, nil, body: { error: message }.to_json)
+    assert_operator Ai::Error::UnsupportedInput, :<, Ai::Error::Refused
+  end
+
+  test "a gateway diagnostic quoting an earlier image refusal doesn't make a 5xx a refusal" do
+    body = { error: { message: "Service unavailable" }, detail: "earlier: image input is not supported" }
+
+    assert_equal Ai::Error::Upstream, Ai::Error.for_status(503, "the server responded with status 503", body:)
+    assert_equal Ai::Error::Upstream, Ai::Error.for_status(503, "the server responded with status 503", body: body.to_json)
+    quoted = "Service unavailable; previous request: image input is not supported"
+    assert_equal Ai::Error::Upstream, Ai::Error.for_status(503, nil, body: { error: { message: quoted } })
+  end
+
+  test "a direct image refusal on 400 and 413 is UnsupportedInput; diagnostics elsewhere are ignored" do
+    message = "image input is not supported - hint: if this is unexpected, you may need to provide the mmproj"
+
+    assert_equal Ai::Error::UnsupportedInput, Ai::Error.for_status(400, message)
+    assert_equal Ai::Error::UnsupportedInput, Ai::Error.for_status(413, nil, body: { error: { message: "image input is not supported by this model" } })
+    assert_equal Ai::Error::Refused, Ai::Error.for_status(400, "gateway said: image input is not supported earlier")
+    assert_equal Ai::Error::Refused, Ai::Error.for_status(400, nil, body: { error: { message: "bad request" }, detail: message })
+  end
+
+  test "a direct image refusal is not a credit error because another field mentions credits" do
+    body = { error: { message: "image input is not supported" }, previous_error: "insufficient credits" }
+
+    assert_equal Ai::Error::UnsupportedInput, Ai::Error.for_status(400, nil, body:)
+    assert_equal Ai::Error::NoCredit, Ai::Error.for_status(400, nil, body: { error: { message: "insufficient credits" } })
+  end
+
+  test "an overload reported as a 400 stays a retryable outage" do
+    response = Struct.new(:status, :body).new(400, { error: { message: "The model is currently overloaded" } }.to_json)
+
+    assert_raises(Ai::Error::Upstream) do
+      Ai::Transport.for(ai_endpoint(name: "gw", base_url: "https://llm.example.test/v1")).send(:mapping_errors) { raise RubyLLM::OverloadedError.new("The model is currently overloaded", response:) }
+    end
   end
 
   private

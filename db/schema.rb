@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_11_20_100000) do
+ActiveRecord::Schema[8.1].define(version: 2026_11_22_230000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
   enable_extension "pgcrypto"
@@ -1596,6 +1596,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_11_20_100000) do
     t.string "status", default: "succeeded", null: false
     t.integer "total_tokens", default: 0, null: false
     t.datetime "updated_at", null: false
+    t.string "finish_reason"
     t.index ["call_id"], name: "index_llm_usages_on_call_id"
     t.index ["family_id", "created_at"], name: "index_llm_usages_on_family_id_and_created_at"
     t.index ["family_id", "operation"], name: "index_llm_usages_on_family_id_and_operation"

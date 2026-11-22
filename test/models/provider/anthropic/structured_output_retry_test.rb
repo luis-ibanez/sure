@@ -2,7 +2,7 @@ require "test_helper"
 require "ostruct"
 
 # The `auto` path (models that reject a forced tool_choice) may get a text-only
-# end_turn answer. All six structured-output helpers retry that once.
+# end_turn answer. All five structured-output helpers retry that once.
 class Provider::Anthropic::StructuredOutputRetryTest < ActiveSupport::TestCase
   PDF = "%PDF-1.4 fake bytes".b
   AUTO_MODEL = "claude-sonnet-5-5"
@@ -31,15 +31,6 @@ class Provider::Anthropic::StructuredOutputRetryTest < ActiveSupport::TestCase
           merchants: [ { id: "m1", name: "Walmart" } ]).enhance_merchants
       },
       check: ->(test, result) { test.assert_equal "walmart.com", result.first.business_url }
-    },
-    "report_bill_setup" => {
-      input: { "name" => "Netflix", "amount" => 15.49, "frequency" => "monthly", "day_of_month" => 3,
-               "category_name" => "Subscriptions", "bill_type" => "subscription", "confidence" => 0.9 },
-      build: ->(client, family) {
-        Provider::Anthropic::BillSetupSuggester.new(client, model: AUTO_MODEL, family: family,
-          charges: [ { date: "2026-08-03", amount: 15.49, name: "NETFLIX.COM" } ], categories: [ "Subscriptions" ]).suggest
-      },
-      check: ->(test, result) { test.assert_equal "Netflix", result.name }
     },
     "report_document_analysis" => {
       input: { "document_type" => "bank_statement", "summary" => "Statement" },

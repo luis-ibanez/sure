@@ -1,6 +1,6 @@
 class RecurringTransaction
-  # Turns charge history into a reviewed bill-configuration proposal via the
-  # family's configured LLM provider. Two modes:
+  # Turns charge history into a reviewed bill-configuration proposal through
+  # Ai::Generations::SuggestBillSetup, on the web thread. Two modes:
   #
   #   suggest_from_entries  -- from candidate entries (the add dialog's
   #                            smart-fill; nothing exists yet)
@@ -45,24 +45,26 @@ class RecurringTransaction
     end
 
     private
+      # Runs on the web thread: smart-fill and smart-configure wait for the answer. Down marks are
+      # off: bill setup has one route, so a mark would fail every family's clicks for a minute
+      # without trying the provider, where each click used to try it.
       def run(charges:, current_config:)
-        raise Error, "No LLM provider configured" unless llm_provider
         raise Error, "No charge history to analyze" if charges.empty?
 
-        result = llm_provider.suggest_bill_setup(
-          charges: charges,
-          categories: family.categories.pluck(:name),
-          current_config: current_config,
-          family: family
-        )
+        result = begin
+          Ai::Generations::SuggestBillSetup.new(
+            charges:, categories: family.categories.pluck(:name), current_config:, family:, user:
+          ).call(down_marks: false)
+        rescue StandardError => error
+          # The generation turns AI errors into a failed result; anything else (a prompt that
+          # doesn't render) is a failed suggestion too, not a 500.
+          raise Error, "Provider failed: #{error.class}: #{error.message}"
+        end
 
-        raise Error, "Provider failed: #{result.error&.message}" unless result.success?
+        raise Error, "Bill setup is unavailable: #{result.availability.reason}" if result.unavailable?
+        raise Error, "Provider failed: #{result.error.message}" unless result.success?
 
-        normalize(result.data)
-      end
-
-      def llm_provider
-        Provider::Registry.preferred_llm_provider
+        normalize(result.value)
       end
 
       def charges_from(entries)
@@ -88,22 +90,18 @@ class RecurringTransaction
         }.compact
       end
 
+      # Ai::Schema has already typed every field and turned values outside the presets and
+      # ranges into nil; this resolves the category to the family's own, keeps only a positive
+      # amount and clamps the confidence.
       def normalize(raw)
-        category = resolve_category(raw.category_name)
+        category = resolve_category(raw[:category_name])
 
         Suggestion.new(
-          name: raw.name,
-          amount: positive_or_nil(raw.amount),
-          frequency: raw.frequency.presence_in(FrequencyPreset::PRESETS),
-          day_of_month: in_range(raw.day_of_month, 1..31),
-          weekday: in_range(raw.weekday, 0..6),
-          month_of_year: in_range(raw.month_of_year, 1..12),
+          **raw.slice(:name, :frequency, :day_of_month, :weekday, :month_of_year, :bill_type, :autopay, :rationale),
+          amount: (BigDecimal(raw[:amount].to_s) if raw[:amount]&.positive?),
           category_id: category&.id,
           category_name: category&.name,
-          bill_type: raw.bill_type.presence_in(%w[bill subscription installment]),
-          autopay: [ true, false ].include?(raw.autopay) ? raw.autopay : nil,
-          confidence: raw.confidence.is_a?(Numeric) ? raw.confidence.to_f.clamp(0.0, 1.0) : nil,
-          rationale: raw.rationale
+          confidence: raw[:confidence]&.to_f&.clamp(0.0, 1.0)
         )
       end
 
@@ -114,16 +112,6 @@ class RecurringTransaction
 
         family.categories.find_by(name: name) ||
           family.categories.find_by(Category.arel_table[:name].lower.eq(name.downcase))
-      end
-
-      def positive_or_nil(value)
-        return nil unless value.is_a?(Numeric)
-
-        value.positive? ? BigDecimal(value.to_s).abs : nil
-      end
-
-      def in_range(value, range)
-        value.is_a?(Integer) && range.cover?(value) ? value : nil
       end
   end
 end

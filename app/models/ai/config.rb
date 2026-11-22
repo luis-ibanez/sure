@@ -20,13 +20,23 @@ class Ai::Config
   class << self
     # The snapshot for this request or job, rebuilt when its ENV or `Setting` inputs change.
     def current
-      return @override if @override
+      override = ActiveSupport::IsolatedExecutionState[:ai_config] || @override
+      return override if override
 
       fingerprint = Ai::LegacyEnvConfig.fingerprint
       unless Current.config && Current.fingerprint == fingerprint
         Current.config, Current.fingerprint = Ai::LegacyEnvConfig.build, fingerprint
       end
       Current.config
+    end
+
+    # Uses `config` instead of the built snapshot inside the block, on this thread or fiber only.
+    def with(config)
+      previous = ActiveSupport::IsolatedExecutionState[:ai_config]
+      ActiveSupport::IsolatedExecutionState[:ai_config] = config
+      yield
+    ensure
+      ActiveSupport::IsolatedExecutionState[:ai_config] = previous
     end
 
     # A fixed snapshot used instead of the built one, in every request and job until reset.

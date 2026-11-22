@@ -82,9 +82,10 @@ class Ai::LegacyEnvConfigTest < ActiveSupport::TestCase
   test "LLM_PROVIDER puts its provider first in every LLM route" do
     config = build("OPENAI_ACCESS_TOKEN" => "sk-test", "ANTHROPIC_API_KEY" => "ak-test", "LLM_PROVIDER" => "anthropic")
 
-    %i[bill_setup extract_pdf detect_merchants enhance_merchants categorize chat].each do |feature|
+    %i[extract_pdf detect_merchants enhance_merchants categorize chat].each do |feature|
       assert_equal %w[anthropic openai], config.routes_for(feature).map { _1.endpoint.name }, feature
     end
+    assert_equal %w[anthropic], config.routes_for(:bill_setup).map { _1.endpoint.name }, "bill setup uses the preferred provider only"
     assert_equal "claude-sonnet-4-6", first_model(config, :bill_setup).name
   end
 

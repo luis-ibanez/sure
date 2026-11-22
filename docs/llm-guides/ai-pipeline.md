@@ -38,8 +38,9 @@ flowchart LR
   contract test fails on `OpenAI::Client.new`, `Anthropic::Client.new` or `Faraday.new`
   anywhere else under `app/models/ai/`.
 - **Use RubyLLM's public API only**: `RubyLLM.context`, `Context#chat`/`#embed`,
-  `Chat#generate`, the `with_*` setters, `RubyLLM::Tool`, `RubyLLM.workflow`,
-  `RubyLLM.with_usage_owner`, `RubyLLM::OpenTelemetry.enable`. Nothing marked `:nodoc:`.
+  `Chat#generate`, the `with_*` setters (`with_instructions`, `with_schema`, `with_thinking`,
+  `with_provider_options` among them), `RubyLLM::Tool`, `RubyLLM.workflow`, `RubyLLM.with_owner`,
+  `RubyLLM.render_prompt`, `RubyLLM::OpenTelemetry.enable`. Nothing marked `:nodoc:`.
   `test/architecture/ai_transport_contract_test.rb` lists the surface Sure uses.
 - **RubyLLM never retries.** Every context has `max_retries = 0`; `Ai::Transport::Base#attempt`
   retries rate limits, 5xx and timeouts up to the endpoint's `max_retries`. RubyLLM retries
@@ -51,7 +52,9 @@ flowchart LR
 - **Wrap every call in `Ai::CallContext.call`.** RubyLLM's `usage.ruby_llm` event then carries
   the family (the usage owner) and the call (the workflow), and `UsageSubscriber` writes one
   `llm_usages` row per request. A failed request's row takes its own error from the
-  `request.ruby_llm` event (`Ai::Transport::Instrumenter`).
+  `request.ruby_llm` event (`Ai::Transport::Instrumenter`). The call's `.ai` event then attaches
+  any error not yet recorded, and writes why the answer stopped (`llm_usages.finish_reason`) on
+  the answering request's row.
 - **Never create `ruby_llm_usages`.** RubyLLM's ledger would then record every call a second time.
 
 **Tests**
@@ -130,3 +133,84 @@ flowchart LR
 - `ai_config_test.rb` checks that the deprecated ENV path routes each feature to the provider and
   model the provider code uses; `ai_feature_guard_test.rb` that every action starting an AI feature
   declares `requires_ai`.
+
+## Generations
+
+A structured-output feature is one small `Ai::Generation` file and a prompt folder; routing,
+failover, the JSON mode and parsing are the plumbing's. Bill setup is the first feature on it
+(`RecurringTransaction::AiSetupSuggester` calls `Ai::Generations::SuggestBillSetup` on the web
+thread). Categorization, merchant detection and enhancement, and PDF import still run on their
+provider classes until their own releases.
+
+```mermaid
+flowchart LR
+  C["caller<br/>RecurringTransaction::AiSetupSuggester"] --> G["Ai::Generation#call"]
+  G --> RT["Ai::Router#resolve(feature)"]
+  G --> P["Ai::Prompt<br/>app/prompts/&lt;name&gt;/"]
+  G --> T["route.transport.generate"]
+  T --> S["Ai::Schema<br/>coerce"]
+  S --> C
+```
+
+**Where things live**
+
+| Concern | File |
+|---|---|
+| A feature's declaration: key, prompt, schema, batching | `app/models/ai/generations/*.rb`, on `app/models/ai/generation.rb` |
+| Its prompts, one folder per variant | `app/prompts/<name>/instructions.txt.erb` and `input.txt.erb`; shared parts in `app/prompts/shared/` |
+| Which folder a route runs | `Ai::LegacyEnvConfig.prompt_for` (`<name>` on OpenAI-compatible endpoints, `<name>_anthropic` on Anthropic) |
+| JSON modes and tolerant parsing | `app/models/ai/transport/json_mode.rb`, `base.rb` |
+| Coercion | `app/models/ai/schema.rb` |
+| The call's result | `app/models/ai/result.rb` |
+| Batches, splitting and down marks, for the batched features to come | `app/models/ai/batch.rb`, `generation.rb`, `down_marks.rb` |
+
+**Adding a generation feature**
+
+1. Add its row to `Ai::Routes::MATRIX` (see above), and its prompt folder name to
+   `Ai::LegacyEnvConfig::PROMPTS`.
+2. Write `app/models/ai/generations/<name>.rb`: `feature`, `prompt`, `schema` (a constant or a
+   method, valid in OpenAI's strict mode), and for a list `batch`, `merge … by:`, `required` and
+   `blank_item`. `prompt_locals` gives the templates their data.
+3. Write the prompt folders. RubyLLM renders them with ERB trim mode `-`, so end a file's last
+   tag with `-%>` when the text must not end in a newline, and check the rendered text against the
+   golden file.
+4. Call it: `.call` returns an `Ai::Result` (`success?`, `value`, `unavailable?`, `error`) and never
+   raises an `Ai::Error`; `.call!` returns the value or raises.
+5. Add `test/models/ai/generations/<name>_test.rb`; `ai_routing_matrix_test`, `ai_schemas_test`
+   and `ai_prompts_test` check the rest.
+
+**Rules**
+
+- **One schema, every transport.** The schema goes through RubyLLM's `with_schema`: a strict
+  `response_format` on chat completions and the Responses API, native structured output on
+  Anthropic. Anthropic refuses numeric limits (`minimum`, `maximum`) and an `enum` on a field
+  typed `[x, "null"]`, so its transport moves the limits into the field's description and sends a
+  nullable enum as `anyOf` its values and null; `Ai::Schema` still checks the answer against the
+  feature's own schema.
+- **JSON modes** apply to chat-completions servers (the endpoint's `json_mode`, from
+  `LLM_JSON_MODE`). `auto` walks strict, json_object, none: it moves on when the answer doesn't
+  parse or, for a list, when more than half the items are blank, and when the server answers 400
+  to the format. A 400 to a request that sent a reasoning effort is retried without it. Any other
+  400 ends the call. An explicit mode stays, apart from one retry in `none`.
+- **One route per feature today.** `Ai::LegacyEnvConfig` lists bill setup on the provider
+  `LLM_PROVIDER` picks, as before, so failover, escalation and bisection don't run in production
+  yet. Bill setup calls with `down_marks: false`: with one route and a person waiting, a down mark
+  would fail every click for a minute.
+- **A caller turns failures into its own error.** `AiSetupSuggester` raises its `Error` for an
+  unavailable feature, a failed result, and any other exception, so the dialogs show "Could not
+  analyze the charge history" instead of a 500.
+- **Prompts change only with evals.** `test/architecture/ai_prompts_test.rb` renders each prompt
+  folder against its golden text in `test/fixtures/files/ai_prompts/`, captured from the
+  per-provider workers the prompts came from.
+
+**Tests**
+
+- `stub_ai(:bill_setup, returns: { ... })` answers the feature's generations without HTTP, still
+  running coercion, failover and instrumentation; it returns the requests sent.
+  `raises: Ai::Error::Timeout` fails them; a block answers per request.
+- `AiTestGeneration` (`test/support/ai_test_generation.rb`) is a batched test generation for the
+  core's batching, escalation and bisection tests.
+- `test/models/ai/live/` replays cassettes with `with_ai_cassette(preset, name)` under
+  `test/vcr_cassettes/ai/<preset>/`; record them with `RECORD_CASSETTES=1` and the keys in ENV,
+  or run them live with `AI_LIVE=1`. Remove account identifiers and cookies from a new cassette
+  before committing it.

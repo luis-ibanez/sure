@@ -1,8 +1,6 @@
 require "test_helper"
 
 class RecurringTransactions::SmartFillsControllerTest < ActionDispatch::IntegrationTest
-  RawSuggestion = Provider::LlmConcept::BillSetupSuggestion
-
   setup do
     sign_in @user = users(:family_admin)
     @user.update!(preferences: (@user.preferences || {}).merge("preview_features_enabled" => true))
@@ -56,11 +54,7 @@ class RecurringTransactions::SmartFillsControllerTest < ActionDispatch::Integrat
   end
 
   test "a provider failure keeps the plain prefill and explains" do
-    provider = Object.new
-    provider.define_singleton_method(:suggest_bill_setup) do |**|
-      Provider::Response.new(success?: false, data: nil, error: StandardError.new("provider down"))
-    end
-    Provider::Registry.stubs(:preferred_llm_provider).returns(provider)
+    stub_ai(:bill_setup, raises: Ai::Error::Upstream.new("provider down", status: 503))
 
     post smart_fill_recurring_transactions_url(entry_id: @entry.id),
          headers: { "Turbo-Frame" => "modal" }
@@ -69,6 +63,17 @@ class RecurringTransactions::SmartFillsControllerTest < ActionDispatch::Integrat
     assert_match "Could not analyze the charge history", response.body
     assert_select "input[name=?][value=?]", "recurring_transaction[name]", "GYM MEMBERSHIP",
       { count: 1 }, "the entry's own prefill must survive a failed suggestion"
+  end
+
+  test "an error outside the AI layer keeps the plain prefill and explains, as a provider failure does" do
+    Ai::Prompt.stubs(:for).raises(NameError, "undefined local variable or method 'charges'")
+
+    post smart_fill_recurring_transactions_url(entry_id: @entry.id),
+         headers: { "Turbo-Frame" => "modal" }
+
+    assert_response :success
+    assert_match "Could not analyze the charge history", response.body
+    assert_select "input[name=?][value=?]", "recurring_transaction[name]", "GYM MEMBERSHIP", { count: 1 }
   end
 
   test "sent back with the reason when no model is set up for bills" do
@@ -163,19 +168,14 @@ class RecurringTransactions::SmartFillsControllerTest < ActionDispatch::Integrat
 
   private
 
+    # The model's answer, as JSON.
     def raw(**overrides)
-      RawSuggestion.new(**{
+      {
         name: nil, amount: nil, frequency: nil, day_of_month: nil, weekday: nil,
         month_of_year: nil, category_name: nil, bill_type: nil, autopay: nil,
         confidence: nil, rationale: nil
-      }.merge(overrides))
+      }.merge(overrides)
     end
 
-    def stub_provider(suggestion)
-      provider = Object.new
-      provider.define_singleton_method(:suggest_bill_setup) do |**|
-        Provider::Response.new(success?: true, data: suggestion, error: nil)
-      end
-      Provider::Registry.stubs(:preferred_llm_provider).returns(provider)
-    end
+    def stub_provider(suggestion) = stub_ai(:bill_setup, returns: suggestion)
 end
