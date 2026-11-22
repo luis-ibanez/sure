@@ -291,7 +291,8 @@ class AiTransportContractTest < ActiveSupport::TestCase
       "https://api.cloudflare.com/client/v4/accounts/a/ai/v1" => "https://api.cloudflare.com/client/v4/accounts/a/ai/v1",
       "https://api.cloudflare.com/client/v4/accounts/a/ai" => "https://api.cloudflare.com/client/v4/accounts/a/ai/v1",
       "http://agent:18789/v1/chat/completions" => "http://agent:18789/v1",
-      "http://v1-proxy.lan:8080" => "http://v1-proxy.lan:8080/v1",
+      "http://v1-proxy.lan:8080" => "http://v1-proxy.lan:8080",
+      "https://gateway.ai.cloudflare.com/v1/acct/gw/compat" => "https://gateway.ai.cloudflare.com/v1/acct/gw/compat",
       "https://envoy.example.com/v13" => "https://envoy.example.com/v13"
     }.each do |given, expected|
       assert_equal expected, Ai::Transport::Http.compatible_base(given), given.inspect
