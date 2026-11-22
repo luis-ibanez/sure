@@ -1,11 +1,10 @@
-# The transport interface: `probe` (AiHealth::Probe), `generate` (Ai::Generation), `judge`
-# (Ai::Judgement), `embed` (Ai::Embeddings) and `ocr` (PDF reading), with retries and one `.ai`
-# event per call. A call a transport doesn't implement raises NotImplementedError.
+# The transport interface: `probe` (AiHealth::Probe), `generate` (Ai::Generation), `judge`,
+# `embed` and `ocr`, with retries and one `.ai` event per call. A call a transport doesn't implement raises NotImplementedError.
 class Ai::Transport::Base
   # One structured-output request. `failed_ratio` (optional) takes the parsed JSON and returns
   # the share of items the model left blank or missed, for `auto` JSON mode's fallback; nil
-  # means blanks are a normal answer (bill setup). `attachments` are Ai::Attachment files sent
-  # after the input: a PDF or page images.
+  # means blanks are a normal answer (bill setup). `attachments` are files sent after the input:
+  # a PDF or page images.
   Request = Data.define(:feature, :family, :model, :instructions, :input, :schema, :schema_name,
                         :reasoning_effort, :json_mode, :failed_ratio, :attachments) do
     def initialize(feature:, model:, instructions:, input:, schema:, schema_name:, family: nil,

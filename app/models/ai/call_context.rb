@@ -3,7 +3,7 @@
 #
 # - `RubyLLM.with_owner(family)`: `usage.ruby_llm` carries the family as `owner`;
 # - `RubyLLM.workflow(name, id:, metadata:)`: every RubyLLM event carries `workflow_id` (the
-#   call id), `workflow_parent_id` (the job's correlation id) and `workflow_metadata`.
+#   call id) and `workflow_metadata`.
 #
 # Sure keeps its own copy in fiber storage, which threads and fibers started inside inherit,
 # so `.ai` events and the OpenTelemetry processor never read RubyLLM's internals.
@@ -30,16 +30,6 @@ module Ai::CallContext
   def current = Fiber[CALL_KEY]
 
   def correlation_id = Fiber[CORRELATION_KEY]
-
-  # Around a job, with the correlation id from its arguments (sync_id, rule_run_id, chat_id,
-  # pdf_import_id). Every call inside it is a child workflow of this one.
-  def job(correlation_id)
-    previous = Fiber[CORRELATION_KEY]
-    Fiber[CORRELATION_KEY] = correlation_id.to_s
-    RubyLLM.workflow("sure.job", id: correlation_id.to_s) { yield }
-  ensure
-    Fiber[CORRELATION_KEY] = previous
-  end
 
   # Around one transport call. `budget` is the seconds one attempt may take, retries included.
   def call(feature:, model:, family: nil, budget: nil)

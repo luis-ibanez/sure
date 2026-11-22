@@ -31,7 +31,7 @@ Ai::Route = Data.define(:feature, :model, :prompt, :json_mode, :reasoning_effort
   # The transport for this entry's endpoint.
   def transport = Ai::Transport.for(endpoint)
 
-  # What instrumentation and Ai::Comparison record: endpoint, model and the entry's overrides.
+  # What instrumentation records: endpoint, model and the entry's overrides.
   def to_event = model.to_event.merge({ prompt:, json_mode:, reasoning_effort: }.compact)
 
   def agent? = endpoint.agent?

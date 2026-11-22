@@ -14,16 +14,16 @@
 #      or an answer cut at the output limit, halve the batch on the same route; a single item
 #      that still can't fit escalates. A route with a smaller batch_size takes the batch in
 #      pieces. A batch no route can use is skipped, unless its answers were unusable before any
-#      batch in the run worked (`answered_before` carries that across Ai::GenerationJob's
-#      chain). Skipped items are logged. Nothing else is retried here; the transport has retried
+#      batch in the run worked (`answered_before` carries that across a chain of calls).
+#      Skipped items are logged. Nothing else is retried here; the transport has retried
 #      429s and 5xxs.
 #   5. Return an Ai::Result with the route that answered and the items not reached. Answers keep
 #      their input order even when a fallback recovers an earlier piece. An outage on a later batch
 #      ends the run with the earlier answers and the rest left for a later job; a slice no route can
 #      use is skipped and logged.
 #
-# `call(batches: 1)` runs one batch, which is what Ai::GenerationJob does (small batches,
-# so other work takes turns); plain `call` runs them all and merges the answers in input order.
+# `call(batches: 1)` runs one batch, so a caller can take small batches and let other work
+# take turns; plain `call` runs them all and merges the answers in input order.
 # `call!` returns the value or raises the Ai::Error, for jobs.
 class Ai::Generation
   # How many times a batch whose answer is unusable on every route is halved to find the
@@ -42,7 +42,7 @@ class Ai::Generation
   end
 
   class_attribute :feature_key, :prompt_key, :static_schema, :schema_label, :batch_key, :merge_key, :merge_by,
-                  :blank_item_check, :judgement_class, :shadow_compare, :shadow_subject, instance_writer: false
+                  :blank_item_check, :judgement_class, instance_writer: false
   class_attribute :key_aliases, default: {}, instance_writer: false
   class_attribute :required_keys, default: [], instance_writer: false
 
@@ -76,17 +76,9 @@ class Ai::Generation
     # Item fields without which an answer can't be matched to its input.
     def required(*keys) = self.required_keys = keys.map(&:to_sym)
 
-    # The Ai::Judgement that answers this feature on a `judge` model (Jev). It takes #arguments
+    # The judgement class that answers this feature on a `judge` model (Jev). It takes #arguments
     # and returns the same value shape.
     def judged_by(klass) = self.judgement_class = klass
-
-    # Runs the feature on its `shadow_<feature>` route as its own job, compared and never applied.
-    # `compare` maps a value to { item id => [value, confidence] }, run on the
-    # generation, so it can turn names into ids; `subject` is the class each item id names.
-    def shadow(compare:, subject:)
-      self.shadow_compare = compare
-      self.shadow_subject = subject.to_s
-    end
   end
 
   attr_reader :family, :user
@@ -109,7 +101,7 @@ class Ai::Generation
   # costs a fixed estimate (PDF import).
   def item_cost(item) = Assistant::TokenEstimator.estimate(item)
 
-  # Files sent with this request's input (Ai::Attachment): a PDF or page images.
+  # Files sent with this request's input: a PDF or page images.
   def attachments = []
 
   # Capabilities this call needs beyond the feature's own, such as `vision` for page images: a
@@ -130,14 +122,10 @@ class Ai::Generation
 
   def call!(...) = call(...).value!
 
-  # The value as { item id => [value, confidence] }, for Ai::Comparison.
-  def compared(value) = instance_exec(value, &shadow_compare)
-
-  # answered_before: an earlier call in the same run answered a batch (Ai::GenerationJob's chain).
-  # shadow: false when the caller samples the shadow itself, once its answer is applied.
+  # answered_before: an earlier call in the same run answered a batch (a chain of calls).
   # down_marks: false for a diagnostic, which must neither skip a route production marked down nor
   # mark one down for production.
-  def call(batches: nil, cancelled: nil, plan: nil, answered_before: false, shadow: true, down_marks: true)
+  def call(batches: nil, cancelled: nil, plan: nil, answered_before: false, down_marks: true)
     @down_marks = down_marks ? Ai::DownMarks : Ai::DownMarks::Ignored
     plan ||= Ai::Router.new(family:, user:).resolve(feature_key)
     return Ai::Result.unavailable(plan) unless plan.is_a?(Ai::Plan)
@@ -511,7 +499,7 @@ class Ai::Generation
       )
     end
 
-    # A hash item's id, or what an item object logs as (Ai::PdfReading::Unit#log_id).
+    # A hash item's id, or what an item object logs as (its log_id).
     def item_id(item) = item.is_a?(Hash) ? item[:id] : item.log_id
 
     # The tokens the prompt takes before any item: rendered once per route with no items. A judge
@@ -530,9 +518,6 @@ class Ai::Generation
 
     # The feature the call is recorded under: shadow_<feature> on a shadow run, so its usage is its own.
     def request_feature = @recorded_feature || feature_key
-
-    def shadow_run? = request_feature != feature_key
-
     # The user's locale when a user started the work, otherwise the family's.
     def prompt_locale = user&.locale.presence || family&.locale.presence
 

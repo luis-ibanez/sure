@@ -7,8 +7,8 @@
 #   chat mode is external. agent_settings holds its allowed emails, agent id and session key.
 # - json_mode: how chat completions ask for JSON. A route entry can override it. The Responses
 #   API and Anthropic always send the schema.
-# - parallel_requests: how many requests one call may have in flight. Only the Jev transport
-#   fans out; nil uses its preset's default.
+# - parallel_requests: how many requests one call may have in flight; nil uses its preset's
+#   default.
 class Ai::Config::Endpoint < Data.define(:name, :protocol, :preset, :base_url, :api_key, :extra_headers, :location,
                                          :timeout_seconds, :max_retries, :responses_api, :probe_check, :vector_store,
                                          :agent, :agent_settings, :json_mode, :parallel_requests, :exact_base_url)
