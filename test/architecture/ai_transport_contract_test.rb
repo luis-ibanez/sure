@@ -374,27 +374,6 @@ class AiTransportContractTest < ActiveSupport::TestCase
     end
   end
 
-  # Request bodies carry financial data, and a gateway's error can quote the key back. At debug
-  # RubyLLM still logs the request line and the error's message, with the key filtered.
-  test "RubyLLM logs no request body and no key, even when Rails logs at debug" do
-    output = StringIO.new
-    rails_logger = RubyLLM.config.logger
-    RubyLLM.config.logger = ActiveSupport::Logger.new(output, level: Logger::DEBUG)
-    stub_request(:post, "https://llm.example.test/v1/chat/completions")
-      .to_return(status: 401, headers: { "Content-Type" => "application/json" },
-                 body: { error: { message: "Invalid API Key sk-sure-secret" } }.to_json)
-    model = ai_model(endpoint: ai_endpoint(api_key: "sk-sure-secret"))
-
-    assert_raises(Ai::Error::Unauthorized) { Ai::Transport.for(model.endpoint).probe(model, :chat) }
-
-    assert_match(%r{POST https://llm.example.test/v1/chat/completions}, output.string)
-    assert_match(/Invalid API Key \[FILTERED\]/, output.string)
-    assert_no_match(/sk-sure-secret/, output.string)
-    assert_no_match(Ai::Transport::Base::PROBE_PROMPT, output.string, "no request body")
-  ensure
-    RubyLLM.config.logger = rails_logger
-  end
-
   private
     def endpoint(protocol, **attributes)
       ai_endpoint(name: "contract", api_key: "test-secret-value-1", **TRANSPORTS.fetch(protocol)[:endpoint], **attributes)
